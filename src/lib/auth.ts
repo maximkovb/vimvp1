@@ -3,7 +3,7 @@ import Google from "next-auth/providers/google";
 import Credentials from "next-auth/providers/credentials";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import { db } from "@/db";
-import { users, accounts, verificationTokens } from "@/db/schema";
+import { users, accounts, verificationTokens, coinTransactions } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 
@@ -71,8 +71,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
   events: {
     async createUser({ user }) {
-      // Award signup bonus — handled in the sign-up action instead
-      // to also cover Credentials sign-ups
+      if (!user.id) return;
+      // Only insert if no signup_bonus exists yet (idempotent)
+      try {
+        await db.insert(coinTransactions).values({
+          userId: user.id,
+          amount: "1000.00",
+          type: "signup_bonus",
+          referenceId: user.id,
+        });
+      } catch {
+        // Unique constraint violation = already awarded (idempotent)
+      }
     },
   },
 });

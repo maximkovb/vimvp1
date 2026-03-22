@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { price } from "@/lib/lmsr";
 import Link from "next/link";
 import { SellButton } from "@/components/SellButton";
+import { DailyReward } from "@/components/DailyReward";
 
 export default async function PortfolioPage() {
   const session = await auth();
@@ -13,12 +14,27 @@ export default async function PortfolioPage() {
 
   const userId = session.user.id;
 
-  // Fetch user balance
+  // Fetch user balance and streak info
   const [user] = await db
-    .select({ balance: users.balance })
+    .select({
+      balance: users.balance,
+      loginStreak: users.loginStreak,
+      lastLoginReward: users.lastLoginReward,
+    })
     .from(users)
     .where(eq(users.id, userId))
     .limit(1);
+
+  // Check if daily reward already claimed today (UTC to match claimDailyReward in economy.ts)
+  const now = new Date();
+  const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const alreadyClaimed = user?.lastLoginReward
+    ? new Date(Date.UTC(
+        user.lastLoginReward.getUTCFullYear(),
+        user.lastLoginReward.getUTCMonth(),
+        user.lastLoginReward.getUTCDate()
+      )).getTime() === todayUTC.getTime()
+    : false;
 
   // Fetch open positions with market data
   const openPositions = await db
@@ -87,6 +103,14 @@ export default async function PortfolioPage() {
   return (
     <div className="max-w-4xl mx-auto px-4 py-6">
       <h1 className="text-2xl font-bold mb-6">Portfolio</h1>
+
+      {/* Daily reward */}
+      <div className="mb-6">
+        <DailyReward
+          alreadyClaimed={alreadyClaimed}
+          currentStreak={user?.loginStreak ?? 0}
+        />
+      </div>
 
       {/* Balance summary */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">

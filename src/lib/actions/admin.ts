@@ -1,17 +1,13 @@
 "use server";
 
 import { db } from "@/db";
-import {
-  markets,
-  positions,
-  users,
-  coinTransactions,
-  priceSnapshots,
-} from "@/db/schema";
-import { eq, and, ne, sql } from "drizzle-orm";
+import { markets, priceSnapshots } from "@/db/schema";
+import { eq } from "drizzle-orm";
 import { auth } from "@/lib/auth";
+import { isAdmin } from "@/lib/admin";
 import { allPrices } from "@/lib/lmsr";
 import { revalidatePath } from "next/cache";
+import { distributePayout, refundPositions } from "@/lib/services/payout";
 
 const YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3";
 
@@ -32,6 +28,9 @@ function extractVideoId(url: string): string | null {
 }
 
 export async function fetchVideoMetadata(url: string) {
+  const session = await auth();
+  if (!isAdmin(session)) return { error: "Unauthorized" };
+
   const videoId = extractVideoId(url);
   if (!videoId) return { error: "Invalid YouTube URL" };
 
@@ -63,9 +62,7 @@ export async function fetchVideoMetadata(url: string) {
 
 export async function createMarket(formData: FormData) {
   const session = await auth();
-  if (!session?.user?.email || session.user.email !== process.env.ADMIN_EMAIL) {
-    return { error: "Unauthorized" };
-  }
+  if (!isAdmin(session)) return { error: "Unauthorized" };
 
   const videoUrl = formData.get("videoUrl") as string;
   const title = formData.get("title") as string;
@@ -132,9 +129,7 @@ export async function createMarket(formData: FormData) {
 
 export async function publishMarket(marketId: string) {
   const session = await auth();
-  if (session?.user?.email !== process.env.ADMIN_EMAIL) {
-    return { error: "Unauthorized" };
-  }
+  if (!isAdmin(session)) return { error: "Unauthorized" };
 
   const [market] = await db
     .select()
@@ -167,144 +162,73 @@ export async function publishMarket(marketId: string) {
 
 export async function cancelMarket(marketId: string) {
   const session = await auth();
-  if (session?.user?.email !== process.env.ADMIN_EMAIL) {
-    return { error: "Unauthorized" };
-  }
+  if (!isAdmin(session)) return { error: "Unauthorized" };
 
-  const [market] = await db
-    .select()
-    .from(markets)
-    .where(eq(markets.id, marketId))
-    .limit(1);
+  const result = await db.transaction(async (tx) => {
+    const [market] = await tx
+      .select()
+      .from(markets)
+      .where(eq(markets.id, marketId))
+      .limit(1);
 
-  if (!market) return { error: "Market not found" };
-  if (market.status === "resolved" || market.status === "cancelled") {
-    return { error: "Cannot cancel a resolved or already cancelled market" };
-  }
-
-  // Refund all positions at cost basis
-  const allPositions = await db
-    .select()
-    .from(positions)
-    .where(
-      and(eq(positions.marketId, marketId), ne(positions.shares, "0"))
-    );
-
-  for (const position of allPositions) {
-    const shares = parseFloat(position.shares);
-    const avgCost = parseFloat(position.avgCostBasis);
-    const refundAmount = shares * avgCost;
-
-    if (refundAmount > 0) {
-      // Credit user balance
-      await db
-        .update(users)
-        .set({
-          balance: sql`${users.balance} + ${refundAmount.toFixed(2)}`,
-        })
-        .where(eq(users.id, position.userId));
-
-      // Log refund
-      await db.insert(coinTransactions).values({
-        userId: position.userId,
-        amount: refundAmount.toFixed(2),
-        type: "refund",
-        referenceId: marketId,
-      });
-
-      // Zero out position
-      await db
-        .update(positions)
-        .set({ shares: "0" })
-        .where(eq(positions.id, position.id));
+    if (!market) return { error: "Market not found" } as const;
+    if (["resolved", "cancelled", "resolving", "failed"].includes(market.status)) {
+      return { error: "Cannot cancel a resolved, resolving, failed, or already cancelled market" } as const;
     }
+
+    await refundPositions(tx, marketId);
+
+    await tx
+      .update(markets)
+      .set({ status: "cancelled" })
+      .where(eq(markets.id, marketId));
+
+    return { success: true } as const;
+  });
+
+  if ("success" in result) {
+    revalidatePath("/");
+    revalidatePath("/admin/markets");
   }
-
-  await db
-    .update(markets)
-    .set({ status: "cancelled" })
-    .where(eq(markets.id, marketId));
-
-  revalidatePath("/");
-  revalidatePath("/admin/markets");
-  return { success: true };
+  return result;
 }
 
 export async function manualResolve(marketId: string, outcome: number) {
   const session = await auth();
-  if (session?.user?.email !== process.env.ADMIN_EMAIL) {
-    return { error: "Unauthorized" };
-  }
+  if (!isAdmin(session)) return { error: "Unauthorized" };
 
   if (outcome !== 0 && outcome !== 1) return { error: "Invalid outcome" };
 
-  const [market] = await db
-    .select()
-    .from(markets)
-    .where(eq(markets.id, marketId))
-    .limit(1);
-
-  if (!market) return { error: "Market not found" };
-  if (market.status !== "failed" && market.status !== "resolving") {
-    return { error: "Can only manually resolve failed or resolving markets" };
-  }
-
-  // Distribute payouts
-  const winningPositions = await db
-    .select()
-    .from(positions)
-    .where(
-      and(
-        eq(positions.marketId, marketId),
-        eq(positions.outcome, outcome),
-        ne(positions.shares, "0")
-      )
-    );
-
-  for (const position of winningPositions) {
-    const shares = parseFloat(position.shares);
-    const payout = shares; // 1 coin per winning share
-
-    // Check idempotency — don't pay out twice
-    const [existing] = await db
-      .select({ id: coinTransactions.id })
-      .from(coinTransactions)
-      .where(
-        and(
-          eq(coinTransactions.userId, position.userId),
-          eq(coinTransactions.referenceId, marketId),
-          eq(coinTransactions.type, "payout")
-        )
-      )
+  const result = await db.transaction(async (tx) => {
+    const [market] = await tx
+      .select()
+      .from(markets)
+      .where(eq(markets.id, marketId))
       .limit(1);
 
-    if (existing) continue;
+    if (!market) return { error: "Market not found" } as const;
+    if (market.status !== "failed" && market.status !== "resolving") {
+      return { error: "Can only manually resolve failed or resolving markets" } as const;
+    }
 
-    await db
-      .update(users)
+    // Set resolved status first to prevent re-entry
+    await tx
+      .update(markets)
       .set({
-        balance: sql`${users.balance} + ${payout.toFixed(2)}`,
+        status: "resolved",
+        outcome,
+        resolvedAt: new Date(),
       })
-      .where(eq(users.id, position.userId));
+      .where(eq(markets.id, marketId));
 
-    await db.insert(coinTransactions).values({
-      userId: position.userId,
-      amount: payout.toFixed(2),
-      type: "payout",
-      referenceId: marketId,
-    });
+    await distributePayout(tx, marketId, outcome);
+
+    return { success: true } as const;
+  });
+
+  if ("success" in result) {
+    revalidatePath("/");
+    revalidatePath("/admin/markets");
   }
-
-  await db
-    .update(markets)
-    .set({
-      status: "resolved",
-      outcome,
-      resolvedAt: new Date(),
-    })
-    .where(eq(markets.id, marketId));
-
-  revalidatePath("/");
-  revalidatePath("/admin/markets");
-  return { success: true };
+  return result;
 }

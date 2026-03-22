@@ -1,4 +1,5 @@
 import { isAdmin } from "@/lib/admin";
+import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 
@@ -7,8 +8,8 @@ export default async function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const admin = await isAdmin();
-  if (!admin) redirect("/");
+  const session = await auth();
+  if (!isAdmin(session)) redirect("/");
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">

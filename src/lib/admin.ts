@@ -1,16 +1,12 @@
-import { auth } from "@/lib/auth";
+import { Session } from "next-auth";
 
-export async function isAdmin(): Promise<boolean> {
-  const session = await auth();
-  if (!session?.user?.email) return false;
+export function isAdmin(session: Session | null): boolean {
   const adminEmail = process.env.ADMIN_EMAIL;
   if (!adminEmail) return false;
-  return session.user.email === adminEmail;
+  return session?.user?.email === adminEmail;
 }
 
-export async function requireAdmin() {
-  const admin = await isAdmin();
-  if (!admin) {
-    throw new Error("Unauthorized: admin access required");
-  }
+export function requireAdmin(session: Session | null): { error: string } | null {
+  if (!isAdmin(session)) return { error: "Unauthorized" };
+  return null;
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { buyShares, previewTrade, type TradePreview } from "@/lib/actions/trade";
 
@@ -16,8 +16,9 @@ export function TradePanel({ marketId, prices }: TradePanelProps) {
   const [preview, setPreview] = useState<TradePreview | null>(null);
   const [error, setError] = useState("");
   const [isPending, startTransition] = useTransition();
+  const previewTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  async function handleAmountChange(value: string) {
+  function handleAmountChange(value: string) {
     setAmount(value);
     setError("");
     setPreview(null);
@@ -25,12 +26,15 @@ export function TradePanel({ marketId, prices }: TradePanelProps) {
     const numAmount = parseFloat(value);
     if (!numAmount || numAmount <= 0) return;
 
-    const result = await previewTrade(marketId, outcome, numAmount);
-    if ("error" in result) {
-      setError(result.error);
-    } else {
-      setPreview(result);
-    }
+    if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+    previewTimerRef.current = setTimeout(async () => {
+      const result = await previewTrade(marketId, outcome, numAmount);
+      if ("error" in result) {
+        setError(result.error);
+      } else {
+        setPreview(result);
+      }
+    }, 400);
   }
 
   async function handleOutcomeChange(newOutcome: number) {

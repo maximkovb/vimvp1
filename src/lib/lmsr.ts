@@ -116,6 +116,6 @@ export function sharesForCost(
  * Calculate the maximum loss the market maker can incur for a binary market.
  * This is the "subsidy" required to fund the market.
  */
-export function maxMarketMakerLoss(b: number, numOutcomes: number = 2): number {
-  return b * Math.log(numOutcomes);
+export function maxMarketMakerLoss(b: number): number {
+  return b * Math.LN2;
 }

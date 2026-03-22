@@ -1,8 +1,62 @@
+import { db } from "@/db";
+import { markets } from "@/db/schema";
+import { desc, eq, or } from "drizzle-orm";
 import { auth } from "@/lib/auth";
+import { getMarketPrices } from "@/lib/market-utils";
 import Link from "next/link";
+import { MarketCard } from "@/components/MarketCard";
+
+function MarketGrid({ items }: { items: (typeof markets.$inferSelect)[] }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {items.map((market) => {
+        const prices = getMarketPrices(market);
+        return (
+          <MarketCard
+            key={market.id}
+            id={market.id}
+            title={market.title}
+            status={market.status}
+            questionType={market.questionType}
+            milestoneThreshold={market.milestoneThreshold}
+            priceYes={prices[0]}
+            priceNo={prices[1]}
+            resolvesAt={market.resolvesAt}
+            outcome={market.outcome}
+            videoMetadata={market.videoMetadata}
+          />
+        );
+      })}
+    </div>
+  );
+}
 
 export default async function HomePage() {
   const session = await auth();
+
+  // Parallel fetch: active/halted + recently resolved
+  const [activeMarkets, resolvedMarkets] = await Promise.all([
+    db
+      .select()
+      .from(markets)
+      .where(
+        or(
+          eq(markets.status, "active"),
+          eq(markets.status, "halted"),
+          eq(markets.status, "resolving")
+        )
+      )
+      .orderBy(desc(markets.createdAt))
+      .limit(50),
+    db
+      .select()
+      .from(markets)
+      .where(eq(markets.status, "resolved"))
+      .orderBy(desc(markets.resolvedAt))
+      .limit(6),
+  ]);
+
+  const hasMarkets = activeMarkets.length > 0 || resolvedMarkets.length > 0;
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-12">
@@ -25,12 +79,28 @@ export default async function HomePage() {
         )}
       </div>
 
-      <div className="text-center text-muted py-16 border border-border rounded-xl bg-card">
-        <p className="text-lg">No active markets yet.</p>
-        <p className="text-sm mt-2">
-          Markets will appear here once an admin creates them.
-        </p>
-      </div>
+      {activeMarkets.length > 0 && (
+        <section className="mb-12">
+          <h2 className="text-lg font-semibold mb-4">Active Markets</h2>
+          <MarketGrid items={activeMarkets} />
+        </section>
+      )}
+
+      {resolvedMarkets.length > 0 && (
+        <section className="mb-12">
+          <h2 className="text-lg font-semibold mb-4">Recently Resolved</h2>
+          <MarketGrid items={resolvedMarkets} />
+        </section>
+      )}
+
+      {!hasMarkets && (
+        <div className="text-center text-muted py-16 border border-border rounded-xl bg-card">
+          <p className="text-lg">No active markets yet.</p>
+          <p className="text-sm mt-2">
+            Markets will appear here once an admin creates them.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

@@ -96,8 +96,9 @@ export const markets = pgTable(
     bParameter: decimal("b_parameter", { precision: 10, scale: 2 }).notNull().default("100"),
     quantityYes: decimal("quantity_yes", { precision: 16, scale: 6 }).notNull().default("0"),
     quantityNo: decimal("quantity_no", { precision: 16, scale: 6 }).notNull().default("0"),
+    version: integer("version").notNull().default(1),
     status: text("status").$type<MarketStatus>().notNull().default("draft"),
-    outcome: integer("outcome"), // null until resolved; 0=NO, 1=YES
+    outcome: integer("outcome"), // null until resolved; 0=YES, 1=NO
     videoMetadata: jsonb("video_metadata").$type<{
       title: string;
       thumbnail: string;
@@ -131,7 +132,7 @@ export const positions = pgTable(
     id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
     userId: text("user_id").notNull().references(() => users.id),
     marketId: text("market_id").notNull().references(() => markets.id),
-    outcome: integer("outcome").notNull(), // 0=NO, 1=YES
+    outcome: integer("outcome").notNull(), // 0=YES, 1=NO
     shares: decimal("shares", { precision: 16, scale: 6 }).notNull().default("0"),
     avgCostBasis: decimal("avg_cost_basis", { precision: 12, scale: 6 }).notNull().default("0"),
   },
@@ -159,7 +160,7 @@ export const trades = pgTable(
     id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
     userId: text("user_id").notNull().references(() => users.id),
     marketId: text("market_id").notNull().references(() => markets.id),
-    outcome: integer("outcome").notNull(), // 0=NO, 1=YES
+    outcome: integer("outcome").notNull(), // 0=YES, 1=NO
     shares: decimal("shares", { precision: 16, scale: 6 }).notNull(),
     cost: decimal("cost", { precision: 12, scale: 6 }).notNull(), // positive=buy, negative=sell
     priceBefore: decimal("price_before", { precision: 8, scale: 6 }).notNull(),
@@ -213,6 +214,7 @@ export const youtubePolls = pgTable(
   },
   (table) => [
     index("youtube_polls_market_id_idx").on(table.marketId),
+    index("youtube_polls_market_polled_idx").on(table.marketId, table.polledAt),
   ]
 );
 
@@ -225,7 +227,6 @@ export const youtubePollsRelations = relations(youtubePolls, ({ one }) => ({
 export type CoinTransactionType =
   | "signup_bonus"
   | "daily_login"
-  | "streak_bonus"
   | "trade"
   | "payout"
   | "refund";
@@ -243,6 +244,11 @@ export const coinTransactions = pgTable(
   (table) => [
     index("coin_transactions_user_id_idx").on(table.userId),
     index("coin_transactions_type_idx").on(table.type),
+    uniqueIndex("coin_transactions_user_ref_type_idx").on(
+      table.userId,
+      table.referenceId,
+      table.type
+    ),
   ]
 );
 

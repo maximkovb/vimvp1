@@ -2,7 +2,6 @@
 
 import { db } from "@/db";
 import { users, coinTransactions } from "@/db/schema";
-import { eq } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import { signIn } from "@/lib/auth";
 
@@ -21,35 +20,40 @@ export async function signUp(formData: FormData) {
     return { error: "Password must be at least 8 characters" };
   }
 
-  // Check if user already exists
-  const [existing] = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(eq(users.email, email))
-    .limit(1);
-
-  if (existing) {
-    return { error: "An account with this email already exists" };
-  }
-
   const passwordHash = await bcrypt.hash(password, 12);
   const userId = crypto.randomUUID();
 
-  // Create user with starting balance
-  await db.insert(users).values({
-    id: userId,
-    name,
-    email,
-    passwordHash,
-    balance: STARTING_BALANCE,
-  });
+  try {
+    await db.transaction(async (tx) => {
+      // Create user with starting balance
+      await tx.insert(users).values({
+        id: userId,
+        name,
+        email,
+        passwordHash,
+        balance: STARTING_BALANCE,
+      });
 
-  // Log signup bonus
-  await db.insert(coinTransactions).values({
-    userId,
-    amount: STARTING_BALANCE,
-    type: "signup_bonus",
-  });
+      // Log signup bonus
+      await tx.insert(coinTransactions).values({
+        userId,
+        amount: STARTING_BALANCE,
+        type: "signup_bonus",
+        referenceId: userId,
+      });
+    });
+  } catch (err: unknown) {
+    // Postgres unique constraint violation
+    if (
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      (err as { code: string }).code === "23505"
+    ) {
+      return { error: "An account with this email already exists" };
+    }
+    throw err;
+  }
 
   // Auto sign in after registration
   try {
