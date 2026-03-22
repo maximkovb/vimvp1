@@ -109,7 +109,7 @@ export async function createMarket(formData: FormData) {
     opensAt: publishImmediately ? now : null,
     haltsAt: publishImmediately ? haltsAt : null,
     resolvesAt: publishImmediately ? resolvesAt : null,
-    createdBy: session.user.id!,
+    createdBy: session!.user!.id!,
   });
 
   // Create initial price snapshot

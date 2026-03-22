@@ -4,8 +4,11 @@ import Credentials from "next-auth/providers/credentials";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import { db } from "@/db";
 import { users, accounts, verificationTokens, coinTransactions } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import bcrypt from "bcryptjs";
+
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_MINUTES = 15;
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: DrizzleAdapter(db, {
@@ -43,8 +46,36 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         if (!user || !user.passwordHash) return null;
 
+        // Check lockout before attempting password compare
+        if (user.lockedUntil && user.lockedUntil > new Date()) {
+          return null;
+        }
+
         const isValid = await bcrypt.compare(password, user.passwordHash);
-        if (!isValid) return null;
+
+        if (!isValid) {
+          const newAttempts = user.failedLoginAttempts + 1;
+          const lockedUntil =
+            newAttempts >= MAX_FAILED_ATTEMPTS
+              ? new Date(Date.now() + LOCKOUT_MINUTES * 60 * 1000)
+              : null;
+          await db
+            .update(users)
+            .set({
+              failedLoginAttempts: sql`${users.failedLoginAttempts} + 1`,
+              lockedUntil,
+            })
+            .where(eq(users.id, user.id));
+          return null;
+        }
+
+        // Reset lockout state on successful login
+        if (user.failedLoginAttempts > 0 || user.lockedUntil) {
+          await db
+            .update(users)
+            .set({ failedLoginAttempts: 0, lockedUntil: null })
+            .where(eq(users.id, user.id));
+        }
 
         return {
           id: user.id,

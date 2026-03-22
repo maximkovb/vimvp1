@@ -23,6 +23,8 @@ export const users = pgTable("users", {
   balance: decimal("balance", { precision: 12, scale: 2 }).notNull().default("1000"),
   loginStreak: integer("login_streak").notNull().default(0),
   lastLoginReward: timestamp("last_login_reward", { mode: "date" }),
+  failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
+  lockedUntil: timestamp("locked_until", { mode: "date" }),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
 });
 
