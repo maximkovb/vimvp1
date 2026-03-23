@@ -3,6 +3,28 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { fetchVideoMetadata, createMarket } from "@/lib/actions/admin";
+import type { RiskTier, ContractRecommendation } from "@/lib/contract";
+
+const RISK_BADGE_STYLES: Record<RiskTier, string> = {
+  low: "bg-green-500/10 text-green-600 border border-green-500/20",
+  medium: "bg-yellow-500/10 text-yellow-600 border border-yellow-500/20",
+  high: "bg-red-500/10 text-red-600 border border-red-500/20",
+};
+const RISK_LABELS: Record<RiskTier, string> = {
+  low: "Low Risk",
+  medium: "Medium Risk",
+  high: "High Risk",
+};
+
+function RiskBadge({ tier }: { tier: RiskTier }) {
+  return (
+    <span
+      className={`text-xs font-semibold px-2 py-0.5 rounded-full ${RISK_BADGE_STYLES[tier]}`}
+    >
+      {RISK_LABELS[tier]}
+    </span>
+  );
+}
 
 export default function CreateMarketPage() {
   const router = useRouter();
@@ -14,13 +36,25 @@ export default function CreateMarketPage() {
     channelTitle: string;
     viewCount: number;
     likeCount: number;
+    contract: ContractRecommendation | null;
   } | null>(null);
   const [error, setError] = useState("");
   const [isPending, startTransition] = useTransition();
 
+  // Contract fields — controlled so they can be auto-populated from analytics.
+  const [milestoneThreshold, setMilestoneThreshold] = useState("");
+  const [bParameter, setBParameter] = useState("100");
+  const [resolutionHours, setResolutionHours] = useState("72");
+  const [riskTier, setRiskTier] = useState<RiskTier | null>(null);
+
   async function handleFetchVideo() {
+    // Reset before fetch so stale values from a previous URL don't linger.
     setError("");
     setVideoPreview(null);
+    setRiskTier(null);
+    setMilestoneThreshold("");
+    setBParameter("100");
+    setResolutionHours("72");
     if (!videoUrl) return;
 
     const result = await fetchVideoMetadata(videoUrl);
@@ -28,6 +62,12 @@ export default function CreateMarketPage() {
       setError(result.error ?? "Unknown error");
     } else {
       setVideoPreview(result);
+      if (result.contract) {
+        setMilestoneThreshold(String(result.contract.milestoneThreshold));
+        setBParameter(String(result.contract.bParameter));
+        setResolutionHours(String(result.contract.resolutionHours));
+        setRiskTier(result.contract.riskTier);
+      }
     }
   }
 
@@ -88,9 +128,12 @@ export default function CreateMarketPage() {
               alt={videoPreview.title}
               className="w-32 h-auto rounded"
             />
-            <div className="text-sm">
+            <div className="text-sm flex-1">
               <div className="font-medium">{videoPreview.title}</div>
-              <div className="text-muted">{videoPreview.channelTitle}</div>
+              <div className="flex items-center gap-2 mt-0.5">
+                <span className="text-muted">{videoPreview.channelTitle}</span>
+                {riskTier && <RiskBadge tier={riskTier} />}
+              </div>
               <div className="text-muted mt-1">
                 {videoPreview.viewCount.toLocaleString()} views ·{" "}
                 {videoPreview.likeCount.toLocaleString()} likes
@@ -151,6 +194,8 @@ export default function CreateMarketPage() {
               required
               min="1"
               placeholder="e.g. 1000000"
+              value={milestoneThreshold}
+              onChange={(e) => setMilestoneThreshold(e.target.value)}
               className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent"
             />
           </div>
@@ -164,13 +209,13 @@ export default function CreateMarketPage() {
             </label>
             <select
               name="resolutionHours"
+              value={resolutionHours}
+              onChange={(e) => setResolutionHours(e.target.value)}
               className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent"
             >
               <option value="24">24 hours</option>
               <option value="48">48 hours</option>
-              <option value="72" selected>
-                72 hours
-              </option>
+              <option value="72">72 hours</option>
               <option value="168">7 days</option>
             </select>
           </div>
@@ -181,9 +226,10 @@ export default function CreateMarketPage() {
             <input
               name="bParameter"
               type="number"
-              defaultValue="100"
               min="1"
               max="1000"
+              value={bParameter}
+              onChange={(e) => setBParameter(e.target.value)}
               className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent"
             />
             <p className="text-xs text-muted mt-1">

@@ -8,6 +8,11 @@ import { isAdmin } from "@/lib/admin";
 import { allPrices } from "@/lib/lmsr";
 import { revalidatePath } from "next/cache";
 import { distributePayout, refundPositions } from "@/lib/services/payout";
+import {
+  calculateConfidence,
+  calculateContractRecommendations,
+  type ContractRecommendation,
+} from "@/lib/contract";
 
 const YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3";
 
@@ -38,7 +43,7 @@ export async function fetchVideoMetadata(url: string) {
   if (!apiKey) return { error: "YouTube API key not configured" };
 
   const res = await fetch(
-    `${YOUTUBE_API_BASE}/videos?part=snippet,statistics&id=${videoId}&key=${apiKey}&fields=items(id,snippet(title,thumbnails/medium/url,channelTitle),statistics(viewCount,likeCount))`,
+    `${YOUTUBE_API_BASE}/videos?part=snippet,statistics&id=${videoId}&key=${apiKey}&fields=items(id,snippet(title,thumbnails/medium/url,channelTitle,channelId,publishedAt),statistics(viewCount,likeCount))`,
     { cache: "no-store" }
   );
 
@@ -50,13 +55,73 @@ export async function fetchVideoMetadata(url: string) {
   }
 
   const item = data.items[0];
+  const viewCount = parseInt(item.statistics.viewCount || "0");
+  const likeCount = parseInt(item.statistics.likeCount || "0");
+
+  // Fetch channel analytics in parallel for risk-tier contract recommendations.
+  // If either call fails, fall back gracefully (contract = null).
+  let contract: ContractRecommendation | null = null;
+  try {
+    const channelId: string = item.snippet.channelId;
+    const publishedAt = new Date(item.snippet.publishedAt);
+    const videoAgeHours = (Date.now() - publishedAt.getTime()) / 3_600_000;
+
+    const [channelRes, searchRes] = await Promise.all([
+      fetch(
+        `${YOUTUBE_API_BASE}/channels?part=statistics&id=${channelId}&key=${apiKey}&fields=items(statistics/subscriberCount)`,
+        { cache: "no-store" }
+      ),
+      fetch(
+        `${YOUTUBE_API_BASE}/search?part=snippet&channelId=${channelId}&type=video&order=date&maxResults=10&key=${apiKey}`,
+        { cache: "no-store" }
+      ),
+    ]);
+
+    let recentViewCounts: number[] = [];
+    if (searchRes.ok) {
+      const searchData = await searchRes.json();
+      const recentVideoIds: string[] = (searchData.items ?? [])
+        .map((v: { id: { videoId: string } }) => v.id.videoId)
+        .filter(Boolean);
+
+      if (recentVideoIds.length > 0) {
+        const statsRes = await fetch(
+          `${YOUTUBE_API_BASE}/videos?part=statistics&id=${recentVideoIds.join(",")}&key=${apiKey}&fields=items(statistics/viewCount)`,
+          { cache: "no-store" }
+        );
+        if (statsRes.ok) {
+          const statsData = await statsRes.json();
+          recentViewCounts = (statsData.items ?? []).map(
+            (v: { statistics: { viewCount?: string } }) =>
+              parseInt(v.statistics.viewCount || "0")
+          );
+        }
+      }
+    }
+
+    // channelRes is fetched but subscriber count is available if needed for future signals.
+    // For now confidence is based on view variance + video age.
+    void channelRes;
+
+    const confidence = calculateConfidence(videoAgeHours, recentViewCounts);
+    contract = calculateContractRecommendations(
+      confidence,
+      viewCount,
+      videoAgeHours,
+      recentViewCounts
+    );
+  } catch {
+    // Analytics fetch failed — contract stays null; UI uses static form defaults.
+  }
+
   return {
     videoId,
     title: item.snippet.title,
     thumbnail: item.snippet.thumbnails.medium.url,
     channelTitle: item.snippet.channelTitle,
-    viewCount: parseInt(item.statistics.viewCount || "0"),
-    likeCount: parseInt(item.statistics.likeCount || "0"),
+    viewCount,
+    likeCount,
+    contract,
   };
 }
 
