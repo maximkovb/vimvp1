@@ -105,6 +105,8 @@ export const markets = pgTable(
       title: string;
       thumbnail: string;
       channelTitle: string;
+      channelId?: string;
+      description?: string;
     }>(),
     opensAt: timestamp("opens_at", { mode: "date" }),
     haltsAt: timestamp("halts_at", { mode: "date" }),

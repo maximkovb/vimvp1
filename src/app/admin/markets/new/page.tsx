@@ -39,6 +39,8 @@ export default function CreateMarketPage() {
     title: string;
     thumbnail: string;
     channelTitle: string;
+    channelId: string;
+    description: string;
     viewCount: number;
     likeCount: number;
     contract: ContractRecommendation | LLMContractRecommendation | null;
@@ -206,6 +208,16 @@ export default function CreateMarketPage() {
           type="hidden"
           name="channelTitle"
           value={videoPreview?.channelTitle ?? ""}
+        />
+        <input
+          type="hidden"
+          name="channelId"
+          value={videoPreview?.channelId ?? ""}
+        />
+        <input
+          type="hidden"
+          name="videoDescription"
+          value={videoPreview?.description ?? ""}
         />
 
         {/* Market title */}

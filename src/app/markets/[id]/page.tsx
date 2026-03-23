@@ -1,13 +1,17 @@
 import { db } from "@/db";
-import { markets, trades, priceSnapshots } from "@/db/schema";
+import { markets, trades, priceSnapshots, youtubePolls } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { price, allPrices } from "@/lib/lmsr";
 import { TradePanel } from "@/components/TradePanel";
 import { PriceChart } from "@/components/PriceChart";
+import { VideoStatsChart } from "@/components/VideoStatsChart";
+import { VideoDescription } from "@/components/VideoDescription";
+import { ChannelHistorySection } from "@/components/ChannelHistorySection";
 import { MarketStatusBadge } from "@/components/MarketStatusBadge";
 import { CountdownTimer } from "@/components/CountdownTimer";
+import { Suspense } from "react";
 
 export default async function MarketPage({
   params,
@@ -53,11 +57,27 @@ export default async function MarketPage({
     value: parseFloat(s.priceYes),
   }));
 
-  const videoMetadata = market.videoMetadata as {
-    title: string;
-    thumbnail: string;
-    channelTitle: string;
-  } | null;
+  // Fetch poll history for video stats trajectory chart
+  const pollHistory = await db
+    .select()
+    .from(youtubePolls)
+    .where(eq(youtubePolls.marketId, id))
+    .orderBy(youtubePolls.polledAt)
+    .limit(500);
+
+  // Build chart data — skip null rows (deleted/private video), convert BigInt to number
+  const statsChartData = pollHistory
+    .filter((p) =>
+      market.questionType === "views" ? p.viewCount !== null : p.likeCount !== null
+    )
+    .map((p) => ({
+      time: Math.floor(p.polledAt.getTime() / 1000),
+      value: Number(market.questionType === "views" ? p.viewCount! : p.likeCount!),
+    }));
+
+  const milestoneNumber = Number(market.milestoneThreshold);
+
+  const videoMetadata = market.videoMetadata;
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
@@ -69,7 +89,7 @@ export default async function MarketPage({
       <h1 className="text-2xl font-bold mb-6">{market.title}</h1>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left column: video + chart */}
+        {/* Left column: video + intelligence + chart */}
         <div className="lg:col-span-2 space-y-6">
           {/* YouTube embed */}
           <div className="aspect-video bg-card rounded-xl overflow-hidden border border-border">
@@ -81,6 +101,66 @@ export default async function MarketPage({
               allowFullScreen
             />
           </div>
+
+          {/* Video Intelligence */}
+
+          {/* Description */}
+          {videoMetadata?.description && (
+            <div className="bg-card border border-border rounded-xl p-4">
+              <h2 className="text-sm font-medium text-muted mb-3">
+                About This Video
+              </h2>
+              <VideoDescription description={videoMetadata.description} />
+            </div>
+          )}
+
+          {/* View / Like trajectory */}
+          <div className="bg-card border border-border rounded-xl p-4">
+            <h2 className="text-sm font-medium text-muted mb-3">
+              {market.questionType === "views" ? "View" : "Like"} Count Trajectory
+            </h2>
+            {statsChartData.length > 0 ? (
+              <VideoStatsChart
+                data={statsChartData}
+                milestone={milestoneNumber}
+                metricLabel={market.questionType}
+              />
+            ) : (
+              <div className="h-48 flex items-center justify-center text-muted text-sm">
+                Poll data not yet available — chart will appear after the first polling interval
+              </div>
+            )}
+          </div>
+
+          {/* Channel history */}
+          {videoMetadata?.channelId && (
+            <Suspense
+              fallback={
+                <div className="bg-card border border-border rounded-xl p-4">
+                  <h2 className="text-sm font-medium text-muted mb-3">
+                    Channel History
+                  </h2>
+                  <div className="flex gap-3 overflow-x-auto pb-2">
+                    {Array.from({ length: 4 }).map((_, i) => (
+                      <div
+                        key={i}
+                        className="flex-shrink-0 w-48 rounded-lg border border-border bg-background overflow-hidden animate-pulse"
+                      >
+                        <div className="w-full aspect-video bg-card" />
+                        <div className="p-2 space-y-1.5">
+                          <div className="h-3 bg-card rounded w-4/5" />
+                          <div className="h-3 bg-card rounded w-3/5" />
+                          <div className="h-2.5 bg-card rounded w-2/5 mt-1" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              }
+            >
+              <ChannelHistorySection channelId={videoMetadata.channelId} />
+            </Suspense>
+          )}
 
           {/* Price chart */}
           <div className="bg-card border border-border rounded-xl p-4">

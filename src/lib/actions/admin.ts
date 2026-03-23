@@ -36,6 +36,7 @@ interface YTVideoItem {
     channelTitle: string;
     publishedAt: string;
     categoryId?: string;
+    description?: string;
     thumbnails?: {
       medium?: { url: string };
       default?: { url: string };
@@ -95,7 +96,7 @@ export async function fetchVideoMetadata(url: string) {
   if (!apiKey) return { error: "YouTube API key not configured" };
 
   const videoRes = await fetch(
-    `${YOUTUBE_API_BASE}/videos?part=snippet,statistics&id=${videoId}&key=${apiKey}&fields=items(snippet(title,thumbnails,channelTitle,channelId,publishedAt,categoryId),statistics(viewCount,likeCount))`,
+    `${YOUTUBE_API_BASE}/videos?part=snippet,statistics&id=${videoId}&key=${apiKey}&fields=items(snippet(title,thumbnails,channelTitle,channelId,publishedAt,categoryId,description),statistics(viewCount,likeCount))`,
     { cache: "no-store", signal: AbortSignal.timeout(YT_TIMEOUT_MS) }
   );
 
@@ -220,11 +221,17 @@ export async function fetchVideoMetadata(url: string) {
     // Analytics fetch failed — contract stays null; UI uses static form defaults.
   }
 
+  if (!item.snippet.description) {
+    console.warn("[fetchVideoMetadata] description missing from YouTube response — check fields projection");
+  }
+
   return {
     videoId,
     title: item.snippet.title,
     thumbnail,
     channelTitle: item.snippet.channelTitle,
+    channelId: item.snippet.channelId,
+    description: item.snippet.description ?? "",
     viewCount,
     likeCount,
     contract,
@@ -276,6 +283,8 @@ export async function createMarket(formData: FormData) {
   const videoTitle = (formData.get("videoTitle") as string) || "";
   const thumbnailRaw = (formData.get("thumbnail") as string) || "";
   const channelTitle = (formData.get("channelTitle") as string) || "";
+  const channelId = (formData.get("channelId") as string) || undefined;
+  const videoDescription = (formData.get("videoDescription") as string) || undefined;
 
   // Only persist thumbnails from YouTube's CDN — rejects injected URLs.
   const thumbnail = YOUTUBE_THUMBNAIL_RE.test(thumbnailRaw) ? thumbnailRaw : "";
@@ -300,6 +309,8 @@ export async function createMarket(formData: FormData) {
       title: videoTitle,
       thumbnail,
       channelTitle,
+      ...(channelId ? { channelId } : {}),
+      ...(videoDescription ? { description: videoDescription } : {}),
     },
     opensAt: publishImmediately ? now : null,
     haltsAt: publishImmediately ? haltsAt : null,
