@@ -7,6 +7,13 @@ export interface ContractRecommendation {
   resolutionHours: 24 | 48 | 72 | 168;
 }
 
+export interface LLMContractRecommendation extends ContractRecommendation {
+  predictionSource: "llm";
+  reasoning: string;
+  confidenceLevel: "high" | "medium" | "low";
+  questionTypeRecommendation: "views" | "likes";
+}
+
 /** Maps confidence score (0–100) → risk tier */
 export function assignRiskTier(confidence: number): RiskTier {
   if (confidence >= 70) return "low";

@@ -12,7 +12,12 @@ import {
   calculateConfidence,
   calculateContractRecommendations,
   type ContractRecommendation,
+  type LLMContractRecommendation,
 } from "@/lib/contract";
+import {
+  generateContractPrediction,
+  type VideoContext,
+} from "@/lib/prediction";
 
 const YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3";
 
@@ -43,7 +48,7 @@ export async function fetchVideoMetadata(url: string) {
   if (!apiKey) return { error: "YouTube API key not configured" };
 
   const res = await fetch(
-    `${YOUTUBE_API_BASE}/videos?part=snippet,statistics&id=${videoId}&key=${apiKey}&fields=items(id,snippet(title,thumbnails/medium/url,channelTitle,channelId,publishedAt),statistics(viewCount,likeCount))`,
+    `${YOUTUBE_API_BASE}/videos?part=snippet,statistics&id=${videoId}&key=${apiKey}&fields=items(id,snippet(title,thumbnails/medium/url,channelTitle,channelId,publishedAt,categoryId),statistics(viewCount,likeCount))`,
     { cache: "no-store" }
   );
 
@@ -60,11 +65,16 @@ export async function fetchVideoMetadata(url: string) {
 
   // Fetch channel analytics in parallel for risk-tier contract recommendations.
   // If either call fails, fall back gracefully (contract = null).
-  let contract: ContractRecommendation | null = null;
+  let contract: ContractRecommendation | LLMContractRecommendation | null =
+    null;
   try {
     const channelId: string = item.snippet.channelId;
-    const publishedAt = new Date(item.snippet.publishedAt);
-    const videoAgeHours = (Date.now() - publishedAt.getTime()) / 3_600_000;
+    const publishedAt: string = item.snippet.publishedAt;
+    const categoryId: string | undefined = item.snippet.categoryId;
+    const videoAgeHours = Math.max(
+      (Date.now() - new Date(publishedAt).getTime()) / 3_600_000,
+      0.1
+    );
 
     const [channelRes, searchRes] = await Promise.all([
       fetch(
@@ -76,6 +86,11 @@ export async function fetchVideoMetadata(url: string) {
         { cache: "no-store" }
       ),
     ]);
+
+    const channelData = channelRes.ok ? await channelRes.json() : null;
+    const subscriberCount = Number(
+      channelData?.items?.[0]?.statistics?.subscriberCount ?? 0
+    );
 
     let recentViewCounts: number[] = [];
     if (searchRes.ok) {
@@ -99,17 +114,47 @@ export async function fetchVideoMetadata(url: string) {
       }
     }
 
-    // channelRes is fetched but subscriber count is available if needed for future signals.
-    // For now confidence is based on view variance + video age.
-    void channelRes;
+    const mean =
+      recentViewCounts.length > 0
+        ? recentViewCounts.reduce((a, b) => a + b, 0) / recentViewCounts.length
+        : viewCount;
+    const stdDev =
+      recentViewCounts.length > 1
+        ? Math.sqrt(
+            recentViewCounts.reduce((s, v) => s + (v - mean) ** 2, 0) /
+              recentViewCounts.length
+          )
+        : 0;
 
+    // Compute confidence before try/catch — needed for the algorithmic fallback path
     const confidence = calculateConfidence(videoAgeHours, recentViewCounts);
-    contract = calculateContractRecommendations(
-      confidence,
-      viewCount,
+
+    const videoContext: VideoContext = {
+      videoTitle: item.snippet.title,
+      channelName: item.snippet.channelTitle,
+      videoCategory: categoryId,
       videoAgeHours,
-      recentViewCounts
-    );
+      publishedDayOfWeek: new Date(publishedAt).getUTCDay(),
+      publishedHourUTC: new Date(publishedAt).getUTCHours(),
+      currentViews: viewCount,
+      currentLikes: likeCount,
+      subscriberCount,
+      channelAvgViews: mean,
+      channelStdDev: stdDev,
+    };
+
+    // Try LLM, fall back to algorithmic. generateContractPrediction logs before rethrowing.
+    try {
+      contract = await generateContractPrediction(videoContext);
+    } catch {
+      // Silent to the user — generateContractPrediction already logged the error type
+      contract = calculateContractRecommendations(
+        confidence,
+        viewCount,
+        videoAgeHours,
+        recentViewCounts
+      );
+    }
   } catch {
     // Analytics fetch failed — contract stays null; UI uses static form defaults.
   }
@@ -145,9 +190,11 @@ export async function createMarket(formData: FormData) {
   const videoId = extractVideoId(videoUrl);
   if (!videoId) return { error: "Invalid YouTube URL" };
 
-  // Fetch video metadata for storage
-  const metadata = await fetchVideoMetadata(videoUrl);
-  if ("error" in metadata) return { error: metadata.error };
+  // Read video metadata from hidden form fields — avoids re-calling fetchVideoMetadata
+  // (which would trigger a second Claude API call)
+  const videoTitle = (formData.get("videoTitle") as string) || "";
+  const thumbnail = (formData.get("thumbnail") as string) || "";
+  const channelTitle = (formData.get("channelTitle") as string) || "";
 
   const now = new Date();
   const hours = parseInt(resolutionHours || "72");
@@ -167,9 +214,9 @@ export async function createMarket(formData: FormData) {
     bParameter: b.toFixed(2),
     status: publishImmediately ? "active" : "draft",
     videoMetadata: {
-      title: metadata.title,
-      thumbnail: metadata.thumbnail,
-      channelTitle: metadata.channelTitle,
+      title: videoTitle,
+      thumbnail,
+      channelTitle,
     },
     opensAt: publishImmediately ? now : null,
     haltsAt: publishImmediately ? haltsAt : null,

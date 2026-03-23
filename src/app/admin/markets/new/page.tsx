@@ -1,9 +1,15 @@
 "use client";
 
-import { useState, useTransition } from "react";
+export const maxDuration = 30;
+
+import { useState, useRef, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { fetchVideoMetadata, createMarket } from "@/lib/actions/admin";
-import type { RiskTier, ContractRecommendation } from "@/lib/contract";
+import type {
+  RiskTier,
+  ContractRecommendation,
+  LLMContractRecommendation,
+} from "@/lib/contract";
 
 const RISK_BADGE_STYLES: Record<RiskTier, string> = {
   low: "bg-green-500/10 text-green-600 border border-green-500/20",
@@ -36,9 +42,10 @@ export default function CreateMarketPage() {
     channelTitle: string;
     viewCount: number;
     likeCount: number;
-    contract: ContractRecommendation | null;
+    contract: ContractRecommendation | LLMContractRecommendation | null;
   } | null>(null);
   const [error, setError] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
   const [isPending, startTransition] = useTransition();
 
   // Contract fields — controlled so they can be auto-populated from analytics.
@@ -46,28 +53,55 @@ export default function CreateMarketPage() {
   const [bParameter, setBParameter] = useState("100");
   const [resolutionHours, setResolutionHours] = useState("72");
   const [riskTier, setRiskTier] = useState<RiskTier | null>(null);
+  const [questionType, setQuestionType] = useState<"views" | "likes">("views");
+
+  // Cancellation token — prevents a stale first-fetch response from overwriting
+  // form state set by a second fetch that completed first.
+  const fetchTokenRef = useRef<{ canceled: boolean } | null>(null);
 
   async function handleFetchVideo() {
-    // Reset before fetch so stale values from a previous URL don't linger.
+    // Cancel any in-flight fetch
+    if (fetchTokenRef.current) fetchTokenRef.current.canceled = true;
+    const token = { canceled: false };
+    fetchTokenRef.current = token;
+
+    // All resets happen synchronously before the await
     setError("");
     setVideoPreview(null);
     setRiskTier(null);
     setMilestoneThreshold("");
     setBParameter("100");
     setResolutionHours("72");
-    if (!videoUrl) return;
+    setQuestionType("views");
+    setIsLoading(true);
 
-    const result = await fetchVideoMetadata(videoUrl);
-    if ("error" in result) {
-      setError(result.error ?? "Unknown error");
-    } else {
-      setVideoPreview(result);
-      if (result.contract) {
-        setMilestoneThreshold(String(result.contract.milestoneThreshold));
-        setBParameter(String(result.contract.bParameter));
-        setResolutionHours(String(result.contract.resolutionHours));
-        setRiskTier(result.contract.riskTier);
+    if (!videoUrl) {
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+      const result = await fetchVideoMetadata(videoUrl);
+      if (token.canceled) return; // stale response — discard
+
+      if ("error" in result) {
+        setError(result.error ?? "Unknown error");
+      } else {
+        if (result.contract) {
+          setMilestoneThreshold(String(result.contract.milestoneThreshold));
+          setBParameter(String(result.contract.bParameter));
+          setResolutionHours(String(result.contract.resolutionHours));
+          setRiskTier(result.contract.riskTier);
+          // Validate LLM value before setting — guards against unexpected enum values
+          if ("questionTypeRecommendation" in result.contract) {
+            const rec = result.contract.questionTypeRecommendation;
+            setQuestionType(rec === "likes" ? "likes" : "views");
+          }
+        }
+        setVideoPreview(result);
       }
+    } finally {
+      if (!token.canceled) setIsLoading(false);
     }
   }
 
@@ -92,6 +126,11 @@ export default function CreateMarketPage() {
     });
   }
 
+  const llmContract =
+    videoPreview?.contract && "predictionSource" in videoPreview.contract
+      ? (videoPreview.contract as LLMContractRecommendation)
+      : null;
+
   return (
     <div className="max-w-2xl">
       <h2 className="text-lg font-semibold mb-6">Create New Market</h2>
@@ -113,9 +152,10 @@ export default function CreateMarketPage() {
             <button
               type="button"
               onClick={handleFetchVideo}
-              className="px-4 py-2 bg-accent text-white text-sm rounded-lg hover:bg-accent-hover transition-colors"
+              disabled={isLoading}
+              className="px-4 py-2 bg-accent text-white text-sm rounded-lg hover:bg-accent-hover disabled:opacity-50 transition-colors"
             >
-              Fetch
+              {isLoading ? "Fetching…" : "Fetch"}
             </button>
           </div>
         </div>
@@ -138,9 +178,36 @@ export default function CreateMarketPage() {
                 {videoPreview.viewCount.toLocaleString()} views ·{" "}
                 {videoPreview.likeCount.toLocaleString()} likes
               </div>
+              {llmContract && (
+                <div className="mt-3 p-3 bg-muted/40 rounded-md border border-border/50 text-sm">
+                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    AI Analysis
+                  </span>
+                  <p className="mt-1 text-muted-foreground leading-relaxed">
+                    {llmContract.reasoning}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         )}
+
+        {/* Hidden inputs so createMarket can read metadata without re-fetching */}
+        <input
+          type="hidden"
+          name="videoTitle"
+          value={videoPreview?.title ?? ""}
+        />
+        <input
+          type="hidden"
+          name="thumbnail"
+          value={videoPreview?.thumbnail ?? ""}
+        />
+        <input
+          type="hidden"
+          name="channelTitle"
+          value={videoPreview?.channelTitle ?? ""}
+        />
 
         {/* Market title */}
         <div>
@@ -178,6 +245,10 @@ export default function CreateMarketPage() {
             <select
               name="questionType"
               required
+              value={questionType}
+              onChange={(e) =>
+                setQuestionType(e.target.value as "views" | "likes")
+              }
               className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent"
             >
               <option value="views">View milestone</option>
