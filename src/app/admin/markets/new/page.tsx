@@ -1,7 +1,5 @@
 "use client";
 
-export const maxDuration = 30;
-
 import { useState, useRef, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { fetchVideoMetadata, createMarket } from "@/lib/actions/admin";
@@ -10,6 +8,7 @@ import type {
   ContractRecommendation,
   LLMContractRecommendation,
 } from "@/lib/contract";
+import { isLLMRecommendation } from "@/lib/contract";
 
 const RISK_BADGE_STYLES: Record<RiskTier, string> = {
   low: "bg-green-500/10 text-green-600 border border-green-500/20",
@@ -93,7 +92,7 @@ export default function CreateMarketPage() {
           setResolutionHours(String(result.contract.resolutionHours));
           setRiskTier(result.contract.riskTier);
           // Validate LLM value before setting — guards against unexpected enum values
-          if ("questionTypeRecommendation" in result.contract) {
+          if (isLLMRecommendation(result.contract)) {
             const rec = result.contract.questionTypeRecommendation;
             setQuestionType(rec === "likes" ? "likes" : "views");
           }
@@ -127,8 +126,8 @@ export default function CreateMarketPage() {
   }
 
   const llmContract =
-    videoPreview?.contract && "predictionSource" in videoPreview.contract
-      ? (videoPreview.contract as LLMContractRecommendation)
+    videoPreview?.contract && isLLMRecommendation(videoPreview.contract)
+      ? videoPreview.contract
       : null;
 
   return (

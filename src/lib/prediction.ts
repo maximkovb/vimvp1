@@ -3,6 +3,7 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import type { LLMContractRecommendation, RiskTier } from "./contract";
+import { CONFIDENCE_TO_RISK_TIER } from "./contract";
 
 export interface VideoContext {
   // Identity
@@ -35,6 +36,11 @@ function getClient(): Anthropic {
 }
 
 const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6";
+if (!process.env.ANTHROPIC_MODEL) {
+  console.warn(
+    "[prediction] ANTHROPIC_MODEL not set — defaulting to claude-sonnet-4-6. Set env var to pin model version and avoid silent drift."
+  );
+}
 
 const PREDICTION_TOOL: Anthropic.Tool = {
   name: "set_contract_parameters",
@@ -46,7 +52,7 @@ const PREDICTION_TOOL: Anthropic.Tool = {
       milestoneThreshold: {
         type: "integer",
         description:
-          "The 50th percentile (MEDIAN) projected views or likes at resolutionHours. NOT the mean or peak.",
+          "The 80th–85th percentile projected views or likes at resolutionHours — the value where only ~15–20% of similar-channel videos reach it. NOT the median or mean.",
       },
       resolutionHours: {
         type: "integer",
@@ -84,38 +90,34 @@ const PREDICTION_TOOL: Anthropic.Tool = {
   },
 };
 
-// Prompt engineering for 50th-percentile calibration.
-// LLMs anchor to the mean by default. Four techniques to get the MEDIAN:
-// 1. Explicit "median not mean" framing
-// 2. Distribution-first reasoning (describe shape, then extract 10th/50th/90th pct)
-// 3. Role framing as "calibrated forecaster" (not optimistic)
-// 4. Explicit outlier suppression ("ignore viral top 10%")
+// Prompt engineering for 85th-percentile calibration.
+// Target the value only ~15% of similar-channel videos reach — risky but attainable.
 const SYSTEM_PROMPT = `You are a calibrated viewership forecaster for a prediction market platform.
 
-GOAL: Set milestoneThreshold at the MEDIAN (50th percentile) of expected outcome — the value where half of similar videos fall below and half above. Do NOT estimate the mean or average, which is skewed by viral outliers.
+GOAL: Set milestoneThreshold at the 80th–85th percentile of expected outcome for this channel — the value where only ~15–20% of this channel's videos reach it. This makes the bet risky but attainable. Do NOT use the median or mean; those produce markets that are too easy to win.
 
 CALIBRATION APPROACH:
-1. First, reason about the distribution shape (log-normal? heavy-tailed? consistent?).
-2. Estimate the 20th and 80th percentile bounds to anchor your range.
-3. Then set milestoneThreshold at the 50th percentile — the TYPICAL case, not the best case.
-4. Ignore viral outlier scenarios (top 10%). Focus on the middle 80% of outcomes.
+1. Use the channel hit probability signal in the prompt (if provided) as your primary anchor.
+2. Reason about the distribution shape (log-normal? heavy-tailed? consistent?).
+3. Set milestoneThreshold at ~85th percentile — roughly 1-in-6 to 1-in-7 videos from this channel would reach it.
+4. If the video is already tracking above the channel average, adjust up accordingly.
 
 LMSR MARKET CONTEXT:
-- bParameter controls price sensitivity. b=50: ~$35 moves price 50%→75%. b=200: ~$139.
-- High confidence (consistent channel, established velocity) → lower b (50–75).
-- Low confidence (chaotic channel, very new video) → higher b (130–200).
+- bParameter controls price sensitivity. b=75: ~$52 moves price 50%→75%. b=150: ~$104.
+- High confidence (consistent channel, established velocity) → lower b (75).
+- Low confidence (chaotic channel, very new video) → higher b (150).
 
-RESOLUTION WINDOW:
-- 24h: strong viral velocity (high subscriber/view ratio), or video already > 12h old
-- 48h: entertainment, gaming, consistent high-subscriber channels
-- 72h: standard content, moderate confidence
-- 168h: slow-burn educational, documentary, niche, or high uncertainty
+RESOLUTION WINDOW (rarity-first — use the channel hit probability signal):
+- P < 10% (rarer than 1-in-10): 168h
+- P 10–20% (1-in-5 to 1-in-10): 72h
+- P ≥ 20% (easier than 1-in-5): 48h
+- 24h: only for already-viral videos (12h+ old, tracking 3× channel average)
 
 QUESTION TYPE:
 - "likes" when likeRatio > 3% AND content is music/meme/community-driven
 - "views" for most content
 
-The milestoneThreshold is a market bet — set it so you'd wager 50/50 whether the video exceeds it.`;
+The milestoneThreshold is a market bet — set it so only ~15% of similar videos from this channel would exceed it.`;
 
 const ResponseSchema = z.object({
   // Pre-round floats before int check — Claude sometimes returns 524288.7
@@ -138,10 +140,22 @@ const ResponseSchema = z.object({
   reasoning: z.string().min(1).max(600),
 });
 
+/**
+ * Strip structural characters that could escape prompt boundaries,
+ * then collapse whitespace and clamp to maxLen.
+ */
+function sanitizeForPrompt(s: string, maxLen: number): string {
+  return s
+    .slice(0, maxLen)
+    .replace(/[\r\n"\\]/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function buildUserPrompt(ctx: VideoContext): string {
-  // Clamp user-origin strings to limit prompt injection surface area
-  const title = ctx.videoTitle.slice(0, 120);
-  const channel = ctx.channelName.slice(0, 60);
+  // Sanitize user-origin strings — strips structural chars before LLM embedding (prompt injection)
+  const title = sanitizeForPrompt(ctx.videoTitle, 120);
+  const channel = sanitizeForPrompt(ctx.channelName, 60);
 
   // Compute derived signals here (not in the interface — callers pass primitives)
   const viewsPerHour = Math.round(ctx.currentViews / ctx.videoAgeHours);
@@ -173,7 +187,7 @@ function buildUserPrompt(ctx: VideoContext): string {
     `Channel avg views per video: ${Math.round(ctx.channelAvgViews).toLocaleString()}`,
     `Channel consistency score: ${channelConsistencyPct}% (100% = perfectly consistent, 0% = chaotic)`,
   ]
-    .filter((line) => line !== null)
+    .filter((line): line is string => line !== null)
     .join("\n");
 }
 
@@ -227,12 +241,7 @@ export async function generateContractPrediction(
     }
 
     const parsed = result.data;
-    const riskTier: RiskTier =
-      parsed.confidenceLevel === "high"
-        ? "low"
-        : parsed.confidenceLevel === "medium"
-          ? "medium"
-          : "high";
+    const riskTier: RiskTier = CONFIDENCE_TO_RISK_TIER[parsed.confidenceLevel];
 
     return {
       riskTier,

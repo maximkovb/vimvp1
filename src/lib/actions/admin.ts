@@ -21,6 +21,51 @@ import {
 
 const YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3";
 
+/** Fetch timeout — prevents hung calls from blocking the 30s worker budget. */
+const YT_TIMEOUT_MS = 8_000;
+
+/** Only accept YouTube CDN thumbnail URLs in DB writes. */
+const YOUTUBE_THUMBNAIL_RE = /^https:\/\/i\.ytimg\.com\//;
+
+// ─── YouTube API response shapes ────────────────────────────────────────────
+
+interface YTVideoItem {
+  snippet: {
+    title: string;
+    channelId: string;
+    channelTitle: string;
+    publishedAt: string;
+    categoryId?: string;
+    thumbnails?: {
+      medium?: { url: string };
+      default?: { url: string };
+    };
+  };
+  statistics: {
+    viewCount?: string;
+    likeCount?: string;
+  };
+}
+
+interface YTChannelItem {
+  statistics: { subscriberCount?: string };
+  contentDetails: { relatedPlaylists: { uploads: string } };
+}
+
+interface YTPlaylistItem {
+  contentDetails: { videoId: string };
+}
+
+interface YTStatsItem {
+  statistics: { viewCount?: string };
+}
+
+interface YTListResponse<T> {
+  items?: T[];
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
 function extractVideoId(url: string): string | null {
   const patterns = [
     /(?:youtube\.com\/watch\?v=)([a-zA-Z0-9_-]{11})/,
@@ -37,6 +82,8 @@ function extractVideoId(url: string): string | null {
   return null;
 }
 
+// ─── Actions ─────────────────────────────────────────────────────────────────
+
 export async function fetchVideoMetadata(url: string) {
   const session = await auth();
   if (!isAdmin(session)) return { error: "Unauthorized" };
@@ -47,24 +94,27 @@ export async function fetchVideoMetadata(url: string) {
   const apiKey = process.env.YOUTUBE_API_KEY;
   if (!apiKey) return { error: "YouTube API key not configured" };
 
-  const res = await fetch(
-    `${YOUTUBE_API_BASE}/videos?part=snippet,statistics&id=${videoId}&key=${apiKey}&fields=items(id,snippet(title,thumbnails/medium/url,channelTitle,channelId,publishedAt,categoryId),statistics(viewCount,likeCount))`,
-    { cache: "no-store" }
+  const videoRes = await fetch(
+    `${YOUTUBE_API_BASE}/videos?part=snippet,statistics&id=${videoId}&key=${apiKey}&fields=items(snippet(title,thumbnails,channelTitle,channelId,publishedAt,categoryId),statistics(viewCount,likeCount))`,
+    { cache: "no-store", signal: AbortSignal.timeout(YT_TIMEOUT_MS) }
   );
 
-  if (!res.ok) return { error: "YouTube API error" };
+  if (!videoRes.ok) return { error: "YouTube API error" };
 
-  const data = await res.json();
-  if (!data.items || data.items.length === 0) {
+  const videoData: YTListResponse<YTVideoItem> = await videoRes.json();
+  if (!videoData.items || videoData.items.length === 0) {
     return { error: "Video not found or is private" };
   }
 
-  const item = data.items[0];
+  const item = videoData.items[0];
   const viewCount = parseInt(item.statistics.viewCount || "0");
   const likeCount = parseInt(item.statistics.likeCount || "0");
+  // Resolve thumbnail before the try block — used in the final return regardless of analytics success.
+  const thumbnails = item.snippet.thumbnails;
+  const thumbnail = thumbnails?.medium?.url ?? thumbnails?.default?.url ?? "";
 
   // Fetch channel analytics in parallel for risk-tier contract recommendations.
-  // If either call fails, fall back gracefully (contract = null).
+  // If any call fails, fall back gracefully (contract = null).
   let contract: ContractRecommendation | LLMContractRecommendation | null =
     null;
   try {
@@ -76,40 +126,46 @@ export async function fetchVideoMetadata(url: string) {
       0.1
     );
 
-    const [channelRes, searchRes] = await Promise.all([
-      fetch(
-        `${YOUTUBE_API_BASE}/channels?part=statistics&id=${channelId}&key=${apiKey}&fields=items(statistics/subscriberCount)`,
-        { cache: "no-store" }
-      ),
-      fetch(
-        `${YOUTUBE_API_BASE}/search?part=snippet&channelId=${channelId}&type=video&order=date&maxResults=10&key=${apiKey}`,
-        { cache: "no-store" }
-      ),
-    ]);
-
-    const channelData = channelRes.ok ? await channelRes.json() : null;
+    // Fetch subscriber count and uploads playlist ID in one call (saves a request vs two parallel).
+    const channelRes = await fetch(
+      `${YOUTUBE_API_BASE}/channels?part=statistics,contentDetails&id=${channelId}&key=${apiKey}&fields=items(statistics/subscriberCount,contentDetails/relatedPlaylists/uploads)`,
+      { cache: "no-store", signal: AbortSignal.timeout(YT_TIMEOUT_MS) }
+    );
+    const channelData: YTListResponse<YTChannelItem> | null = channelRes.ok
+      ? await channelRes.json()
+      : null;
     const subscriberCount = Number(
       channelData?.items?.[0]?.statistics?.subscriberCount ?? 0
     );
+    const uploadsPlaylistId =
+      channelData?.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
 
+    // Use playlistItems.list (1 quota unit) instead of search.list (100 quota units).
     let recentViewCounts: number[] = [];
-    if (searchRes.ok) {
-      const searchData = await searchRes.json();
-      const recentVideoIds: string[] = (searchData.items ?? [])
-        .map((v: { id: { videoId: string } }) => v.id.videoId)
-        .filter(Boolean);
+    if (uploadsPlaylistId) {
+      const playlistRes = await fetch(
+        `${YOUTUBE_API_BASE}/playlistItems?part=contentDetails&playlistId=${uploadsPlaylistId}&maxResults=10&key=${apiKey}&fields=items(contentDetails/videoId)`,
+        { cache: "no-store", signal: AbortSignal.timeout(YT_TIMEOUT_MS) }
+      );
+      if (playlistRes.ok) {
+        const playlistData: YTListResponse<YTPlaylistItem> =
+          await playlistRes.json();
+        const recentVideoIds = (playlistData.items ?? [])
+          .map((v) => v.contentDetails.videoId)
+          .filter(Boolean);
 
-      if (recentVideoIds.length > 0) {
-        const statsRes = await fetch(
-          `${YOUTUBE_API_BASE}/videos?part=statistics&id=${recentVideoIds.join(",")}&key=${apiKey}&fields=items(statistics/viewCount)`,
-          { cache: "no-store" }
-        );
-        if (statsRes.ok) {
-          const statsData = await statsRes.json();
-          recentViewCounts = (statsData.items ?? []).map(
-            (v: { statistics: { viewCount?: string } }) =>
-              parseInt(v.statistics.viewCount || "0")
+        if (recentVideoIds.length > 0) {
+          const statsRes = await fetch(
+            `${YOUTUBE_API_BASE}/videos?part=statistics&id=${recentVideoIds.join(",")}&key=${apiKey}&fields=items(statistics/viewCount)`,
+            { cache: "no-store", signal: AbortSignal.timeout(YT_TIMEOUT_MS) }
           );
+          if (statsRes.ok) {
+            const statsData: YTListResponse<YTStatsItem> =
+              await statsRes.json();
+            recentViewCounts = (statsData.items ?? []).map((v) =>
+              parseInt(v.statistics.viewCount || "0")
+            );
+          }
         }
       }
     }
@@ -126,25 +182,30 @@ export async function fetchVideoMetadata(url: string) {
           )
         : 0;
 
-    // Compute confidence before try/catch — needed for the algorithmic fallback path
-    const confidence = calculateConfidence(videoAgeHours, recentViewCounts);
-
-    const videoContext: VideoContext = {
-      videoTitle: item.snippet.title,
-      channelName: item.snippet.channelTitle,
-      videoCategory: categoryId,
+    // Pass precomputed mean/stdDev to skip re-iteration inside calculateConfidence.
+    const confidence = calculateConfidence(
       videoAgeHours,
-      publishedDayOfWeek: new Date(publishedAt).getUTCDay(),
-      publishedHourUTC: new Date(publishedAt).getUTCHours(),
-      currentViews: viewCount,
-      currentLikes: likeCount,
-      subscriberCount,
-      channelAvgViews: mean,
-      channelStdDev: stdDev,
-    };
+      recentViewCounts,
+      recentViewCounts.length > 1 ? mean : undefined,
+      recentViewCounts.length > 1 ? stdDev : undefined
+    );
 
     // Try LLM, fall back to algorithmic. generateContractPrediction logs before rethrowing.
     try {
+      // VideoContext constructed inside inner try — only needed for the LLM path.
+      const videoContext: VideoContext = {
+        videoTitle: item.snippet.title,
+        channelName: item.snippet.channelTitle,
+        videoCategory: categoryId,
+        videoAgeHours,
+        publishedDayOfWeek: new Date(publishedAt).getUTCDay(),
+        publishedHourUTC: new Date(publishedAt).getUTCHours(),
+        currentViews: viewCount,
+        currentLikes: likeCount,
+        subscriberCount,
+        channelAvgViews: mean,
+        channelStdDev: stdDev,
+      };
       contract = await generateContractPrediction(videoContext);
     } catch {
       // Silent to the user — generateContractPrediction already logged the error type
@@ -162,7 +223,7 @@ export async function fetchVideoMetadata(url: string) {
   return {
     videoId,
     title: item.snippet.title,
-    thumbnail: item.snippet.thumbnails.medium.url,
+    thumbnail,
     channelTitle: item.snippet.channelTitle,
     viewCount,
     likeCount,
@@ -174,33 +235,55 @@ export async function createMarket(formData: FormData) {
   const session = await auth();
   if (!isAdmin(session)) return { error: "Unauthorized" };
 
-  const videoUrl = formData.get("videoUrl") as string;
-  const title = formData.get("title") as string;
-  const description = formData.get("description") as string;
-  const questionType = formData.get("questionType") as "views" | "likes";
-  const milestoneThreshold = formData.get("milestoneThreshold") as string;
-  const bParameter = formData.get("bParameter") as string;
-  const resolutionHours = formData.get("resolutionHours") as string;
+  const videoUrl = (formData.get("videoUrl") ?? "") as string;
+  const title = (formData.get("title") ?? "") as string;
+  const description = (formData.get("description") ?? "") as string;
+  const questionType = (formData.get("questionType") ?? "") as
+    | "views"
+    | "likes";
+  const milestoneThresholdRaw = (formData.get("milestoneThreshold") ??
+    "") as string;
+  const bParameterRaw = (formData.get("bParameter") ?? "") as string;
+  const resolutionHours = (formData.get("resolutionHours") ?? "") as string;
   const publishImmediately = formData.get("publishImmediately") === "true";
 
-  if (!videoUrl || !title || !questionType || !milestoneThreshold) {
+  if (!videoUrl || !title || !questionType || !milestoneThresholdRaw) {
     return { error: "Required fields missing" };
   }
 
   const videoId = extractVideoId(videoUrl);
   if (!videoId) return { error: "Invalid YouTube URL" };
 
+  // Server-side bParameter validation — b=0 causes LMSR divide-by-zero.
+  const b = parseFloat(bParameterRaw || "100");
+  if (!isFinite(b) || b < 1 || b > 1000) {
+    return { error: "bParameter must be between 1 and 1000" };
+  }
+
+  // Server-side milestoneThreshold validation — guards against non-integer or overflow.
+  let thresholdBigInt: bigint;
+  try {
+    thresholdBigInt = BigInt(Math.round(Number(milestoneThresholdRaw)));
+    if (thresholdBigInt < BigInt(1) || thresholdBigInt > BigInt(10_000_000_000)) {
+      return { error: "milestoneThreshold must be between 1 and 10,000,000,000" };
+    }
+  } catch {
+    return { error: "Invalid milestoneThreshold" };
+  }
+
   // Read video metadata from hidden form fields — avoids re-calling fetchVideoMetadata
   // (which would trigger a second Claude API call)
   const videoTitle = (formData.get("videoTitle") as string) || "";
-  const thumbnail = (formData.get("thumbnail") as string) || "";
+  const thumbnailRaw = (formData.get("thumbnail") as string) || "";
   const channelTitle = (formData.get("channelTitle") as string) || "";
+
+  // Only persist thumbnails from YouTube's CDN — rejects injected URLs.
+  const thumbnail = YOUTUBE_THUMBNAIL_RE.test(thumbnailRaw) ? thumbnailRaw : "";
 
   const now = new Date();
   const hours = parseInt(resolutionHours || "72");
   const resolvesAt = new Date(now.getTime() + hours * 60 * 60 * 1000);
   const haltsAt = new Date(resolvesAt.getTime() - 5 * 60 * 1000);
-  const b = parseFloat(bParameter || "100");
 
   const marketId = crypto.randomUUID();
 
@@ -210,7 +293,7 @@ export async function createMarket(formData: FormData) {
     title,
     description: description || null,
     questionType,
-    milestoneThreshold: BigInt(milestoneThreshold),
+    milestoneThreshold: thresholdBigInt,
     bParameter: b.toFixed(2),
     status: publishImmediately ? "active" : "draft",
     videoMetadata: {
