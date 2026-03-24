@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { isAdmin } from "@/lib/admin";
 import { allPrices } from "@/lib/lmsr";
+import { computeMilestoneFloor } from "@/lib/market-utils";
 import { revalidatePath } from "next/cache";
 import { distributePayout, refundPositions } from "@/lib/services/payout";
 import {
@@ -244,9 +245,7 @@ export async function createMarket(formData: FormData) {
   const videoUrl = (formData.get("videoUrl") ?? "") as string;
   const title = (formData.get("title") ?? "") as string;
   const description = (formData.get("description") ?? "") as string;
-  const questionType = (formData.get("questionType") ?? "") as
-    | "views"
-    | "likes";
+  const questionType = (formData.get("questionType") ?? "") as string;
   const milestoneThresholdRaw = (formData.get("milestoneThreshold") ??
     "") as string;
   const bParameterRaw = (formData.get("bParameter") ?? "") as string;
@@ -256,6 +255,13 @@ export async function createMarket(formData: FormData) {
   if (!videoUrl || !title || !questionType || !milestoneThresholdRaw) {
     return { error: "Required fields missing" };
   }
+
+  // Runtime allowlist — TypeScript cast above does not enforce at runtime.
+  if (questionType !== "views" && questionType !== "likes") {
+    return { error: "Invalid questionType" };
+  }
+  // Narrow the type now that we've validated it.
+  const validatedQuestionType = questionType as "views" | "likes";
 
   const videoId = extractVideoId(videoUrl);
   if (!videoId) return { error: "Invalid YouTube URL" };
@@ -278,17 +284,23 @@ export async function createMarket(formData: FormData) {
   }
 
   // 20% floor guard — milestone must require future growth above the video's current analytics.
-  const initialViewCountRaw = parseInt(formData.get("initialViewCount") as string);
-  const initialLikeCountRaw = parseInt(formData.get("initialLikeCount") as string);
-  if (!isNaN(initialViewCountRaw) && !isNaN(initialLikeCountRaw)) {
-    const initialCount =
-      questionType === "views" ? initialViewCountRaw : initialLikeCountRaw;
-    const requiredFloor = Math.ceil(initialCount * 1.2);
-    if (Number(milestoneThresholdRaw) < requiredFloor) {
-      return {
-        error: `Milestone must be at least 20% above the current ${questionType} count (minimum: ${requiredFloor.toLocaleString()})`,
-      };
-    }
+  // These fields are required; omitting them is a hard error (not a silent bypass).
+  // Number() correctly parses scientific notation ("1e6" → 1000000); parseInt would truncate to 1.
+  const initialViewCount = Math.round(Number((formData.get("initialViewCount") ?? "") as string));
+  const initialLikeCount = Math.round(Number((formData.get("initialLikeCount") ?? "") as string));
+  if (!isFinite(initialViewCount) || !isFinite(initialLikeCount) ||
+      initialViewCount < 0 || initialLikeCount < 0) {
+    return { error: "initialViewCount and initialLikeCount are required" };
+  }
+  const initialCount = validatedQuestionType === "views" ? initialViewCount : initialLikeCount;
+  // Note: the server enforces only the analytics component (ceil(current × 1.2)). The anchor
+  // component (0.1× anchor) is a UX constraint enforced by the slider and is not re-validated
+  // server-side because the anchor is a client-supplied value.
+  const requiredFloor = Math.ceil(initialCount * 1.2);
+  if (Number(milestoneThresholdRaw) < requiredFloor) {
+    return {
+      error: `Milestone must be at least 20% above the current ${validatedQuestionType} count (minimum: ${requiredFloor.toLocaleString()})`,
+    };
   }
 
   // Read video metadata from hidden form fields — avoids re-calling fetchVideoMetadata
@@ -318,7 +330,7 @@ export async function createMarket(formData: FormData) {
     youtubeVideoId: videoId,
     title,
     description: description || null,
-    questionType,
+    questionType: validatedQuestionType,
     milestoneThreshold: thresholdBigInt,
     bParameter: b.toFixed(2),
     status: publishImmediately ? "active" : "draft",
@@ -345,17 +357,12 @@ export async function createMarket(formData: FormData) {
     });
   }
 
-  // Insert initial poll row from the stats already fetched during video preview,
-  // so the trajectory chart is populated immediately on market creation.
-  const initialViewCount = parseInt(formData.get("initialViewCount") as string);
-  const initialLikeCount = parseInt(formData.get("initialLikeCount") as string);
-  if (!isNaN(initialViewCount) && !isNaN(initialLikeCount)) {
-    await db.insert(youtubePolls).values({
-      marketId,
-      viewCount: BigInt(initialViewCount),
-      likeCount: BigInt(initialLikeCount),
-    });
-  }
+  // Insert initial poll row using the already-validated view/like counts above.
+  await db.insert(youtubePolls).values({
+    marketId,
+    viewCount: BigInt(initialViewCount),
+    likeCount: BigInt(initialLikeCount),
+  });
 
   revalidatePath("/");
   revalidatePath("/admin/markets");

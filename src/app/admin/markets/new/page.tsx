@@ -86,7 +86,6 @@ export default function CreateMarketPage() {
   const milestoneFloor = contractLoaded
     ? computeMilestoneFloor(anchorMilestone!, currentAnalytics)
     : 0;
-  const milestoneMin = milestoneFloor;
   const milestoneMax = contractLoaded
     ? computeMilestoneMax(anchorMilestone!, currentAnalytics)
     : 100;
@@ -95,6 +94,9 @@ export default function CreateMarketPage() {
     : 1;
 
   // Re-clamp milestone when questionType switches or floor shifts (e.g. after a re-fetch).
+  // milestoneThreshold is intentionally absent from the dep array — it is read for comparison
+  // only. Adding it would re-fire this effect on every slider move, fighting user input.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!anchorMilestone || !milestoneThreshold) return;
     if (Number(milestoneThreshold) < milestoneFloor) {
@@ -137,14 +139,18 @@ export default function CreateMarketPage() {
         setError(result.error ?? "Unknown error");
       } else {
         if (result.contract) {
-          // Clamp to 20% above current views (questionType resets to "views" at fetch start).
-          const fetchFloor = Math.ceil(result.viewCount * 1.2);
-          const clampedMilestone = Math.max(result.contract.milestoneThreshold, fetchFloor);
+          // Clamp to the 20% floor (questionType resets to "views" at fetch start).
+          // Anchor is set to the clamped value — not the raw AI recommendation — so
+          // proportional slider/resolution math stays correct when floor > AI recommendation.
+          const clampedMilestone = computeMilestoneFloor(
+            result.contract.milestoneThreshold,
+            result.viewCount
+          );
           setMilestoneThreshold(String(clampedMilestone));
           setBParameter(String(result.contract.bParameter));
           setResolutionHours(String(result.contract.resolutionHours));
           setRiskTier(result.contract.riskTier);
-          setAnchorMilestone(result.contract.milestoneThreshold);
+          setAnchorMilestone(clampedMilestone);
           setAnchorHours(result.contract.resolutionHours);
           // Validate LLM value before setting — guards against unexpected enum values
           if (isLLMRecommendation(result.contract)) {
@@ -192,7 +198,7 @@ export default function CreateMarketPage() {
     setResolutionHours(String(hours));
     if (anchorMilestone !== null && anchorHours !== null) {
       const raw = Math.round(anchorMilestone * (hours / anchorHours));
-      setMilestoneThreshold(String(Math.max(milestoneMin, Math.min(milestoneMax, raw))));
+      setMilestoneThreshold(String(Math.max(milestoneFloor, Math.min(milestoneMax, raw))));
     }
   }
 
@@ -353,7 +359,7 @@ export default function CreateMarketPage() {
             <div className="space-y-2 pt-1">
               <div className="flex justify-between text-xs text-muted">
                 <span>
-                  {contractLoaded ? milestoneMin.toLocaleString() : "–"}
+                  {contractLoaded ? milestoneFloor.toLocaleString() : "–"}
                 </span>
                 <span className="text-sm font-semibold text-foreground">
                   {milestoneThreshold
@@ -367,7 +373,7 @@ export default function CreateMarketPage() {
               <input
                 type="range"
                 disabled={!contractLoaded}
-                min={milestoneMin}
+                min={milestoneFloor}
                 max={milestoneMax}
                 step={milestoneStep}
                 value={milestoneThreshold || "0"}

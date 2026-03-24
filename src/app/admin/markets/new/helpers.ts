@@ -17,18 +17,5 @@ export function computeStep(anchor: number): number {
   return Math.max(1, Math.pow(10, Math.floor(Math.log10(anchor)) - 1));
 }
 
-/**
- * Milestone slider floor: max(0.1× anchor, ceil(currentAnalytics × 1.2)).
- * Ensures the target always requires measurable future growth above the video's current count.
- */
-export function computeMilestoneFloor(anchor: number, currentAnalytics: number): number {
-  return Math.max(Math.round(anchor * 0.1), Math.ceil(currentAnalytics * 1.2));
-}
-
-/**
- * Milestone slider ceiling: max(5× anchor, ceil(currentAnalytics × 1.5)).
- * Raised dynamically so the floor never exceeds the ceiling for already-viral videos.
- */
-export function computeMilestoneMax(anchor: number, currentAnalytics: number): number {
-  return Math.max(Math.round(anchor * 5), Math.ceil(currentAnalytics * 1.5));
-}
+// Re-exported from the shared lib so this module remains the single import point for page.tsx.
+export { computeMilestoneFloor, computeMilestoneMax } from "../../../../lib/market-utils";
