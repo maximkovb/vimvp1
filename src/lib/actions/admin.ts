@@ -277,6 +277,20 @@ export async function createMarket(formData: FormData) {
     return { error: "Invalid milestoneThreshold" };
   }
 
+  // 20% floor guard — milestone must require future growth above the video's current analytics.
+  const initialViewCountRaw = parseInt(formData.get("initialViewCount") as string);
+  const initialLikeCountRaw = parseInt(formData.get("initialLikeCount") as string);
+  if (!isNaN(initialViewCountRaw) && !isNaN(initialLikeCountRaw)) {
+    const initialCount =
+      questionType === "views" ? initialViewCountRaw : initialLikeCountRaw;
+    const requiredFloor = Math.ceil(initialCount * 1.2);
+    if (Number(milestoneThresholdRaw) < requiredFloor) {
+      return {
+        error: `Milestone must be at least 20% above the current ${questionType} count (minimum: ${requiredFloor.toLocaleString()})`,
+      };
+    }
+  }
+
   // Read video metadata from hidden form fields — avoids re-calling fetchVideoMetadata
   // (which would trigger a second Claude API call)
   const videoTitle = (formData.get("videoTitle") as string) || "";
@@ -291,6 +305,9 @@ export async function createMarket(formData: FormData) {
 
   const now = new Date();
   const hours = parseInt(resolutionHours || "72");
+  if (![24, 48, 72, 168].includes(hours)) {
+    return { error: "resolutionHours must be 24, 48, 72, or 168" };
+  }
   const resolvesAt = new Date(now.getTime() + hours * 60 * 60 * 1000);
   const haltsAt = new Date(resolvesAt.getTime() - 5 * 60 * 1000);
 

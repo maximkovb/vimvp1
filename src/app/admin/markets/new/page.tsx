@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useTransition } from "react";
+import { useState, useRef, useTransition, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { fetchVideoMetadata, createMarket } from "@/lib/actions/admin";
 import type {
@@ -9,6 +9,17 @@ import type {
   LLMContractRecommendation,
 } from "@/lib/contract";
 import { isLLMRecommendation } from "@/lib/contract";
+
+import { snapToPreset, computeStep, computeMilestoneFloor, computeMilestoneMax } from "./helpers";
+import { formatCount } from "@/lib/format";
+
+const RESOLUTION_PRESETS = [24, 48, 72, 168] as const;
+const RESOLUTION_LABELS: Record<(typeof RESOLUTION_PRESETS)[number], string> = {
+  24: "24h",
+  48: "48h",
+  72: "72h",
+  168: "7d",
+};
 
 const RISK_BADGE_STYLES: Record<RiskTier, string> = {
   low: "bg-green-500/10 text-green-600 border border-green-500/20",
@@ -52,9 +63,44 @@ export default function CreateMarketPage() {
   // Contract fields — controlled so they can be auto-populated from analytics.
   const [milestoneThreshold, setMilestoneThreshold] = useState("");
   const [bParameter, setBParameter] = useState("100");
-  const [resolutionHours, setResolutionHours] = useState("72");
+  const [resolutionHours, setResolutionHours] = useState("");
   const [riskTier, setRiskTier] = useState<RiskTier | null>(null);
   const [questionType, setQuestionType] = useState<"views" | "likes">("views");
+
+  // Anchor — the original AI recommendation, used as fixed reference for proportional adjustments.
+  const [anchorMilestone, setAnchorMilestone] = useState<number | null>(null);
+  const [anchorHours, setAnchorHours] = useState<number | null>(null);
+
+  // Derived: true once a contract recommendation has loaded. Used to gate proportional controls
+  // and form submission separately from the anchor values used for math.
+  const contractLoaded = anchorMilestone !== null;
+  // Current analytics for the active metric — drives the 20% floor.
+  const currentAnalytics =
+    questionType === "views"
+      ? (videoPreview?.viewCount ?? 0)
+      : (videoPreview?.likeCount ?? 0);
+
+  // Milestone slider bounds:
+  //   floor = max(0.1× anchor, ceil(currentAnalytics × 1.2)) — target must require future growth.
+  //   ceiling = max(5× anchor, ceil(currentAnalytics × 1.5)) — guarantees headroom above the floor.
+  const milestoneFloor = contractLoaded
+    ? computeMilestoneFloor(anchorMilestone!, currentAnalytics)
+    : 0;
+  const milestoneMin = milestoneFloor;
+  const milestoneMax = contractLoaded
+    ? computeMilestoneMax(anchorMilestone!, currentAnalytics)
+    : 100;
+  const milestoneStep = contractLoaded
+    ? computeStep(Math.max(milestoneFloor, anchorMilestone!))
+    : 1;
+
+  // Re-clamp milestone when questionType switches or floor shifts (e.g. after a re-fetch).
+  useEffect(() => {
+    if (!anchorMilestone || !milestoneThreshold) return;
+    if (Number(milestoneThreshold) < milestoneFloor) {
+      setMilestoneThreshold(String(milestoneFloor));
+    }
+  }, [questionType, milestoneFloor]);
 
   // Cancellation token — prevents a stale first-fetch response from overwriting
   // form state set by a second fetch that completed first.
@@ -72,8 +118,10 @@ export default function CreateMarketPage() {
     setRiskTier(null);
     setMilestoneThreshold("");
     setBParameter("100");
-    setResolutionHours("72");
+    setResolutionHours("");
     setQuestionType("views");
+    setAnchorMilestone(null);
+    setAnchorHours(null);
     setIsLoading(true);
 
     if (!videoUrl) {
@@ -89,10 +137,15 @@ export default function CreateMarketPage() {
         setError(result.error ?? "Unknown error");
       } else {
         if (result.contract) {
-          setMilestoneThreshold(String(result.contract.milestoneThreshold));
+          // Clamp to 20% above current views (questionType resets to "views" at fetch start).
+          const fetchFloor = Math.ceil(result.viewCount * 1.2);
+          const clampedMilestone = Math.max(result.contract.milestoneThreshold, fetchFloor);
+          setMilestoneThreshold(String(clampedMilestone));
           setBParameter(String(result.contract.bParameter));
           setResolutionHours(String(result.contract.resolutionHours));
           setRiskTier(result.contract.riskTier);
+          setAnchorMilestone(result.contract.milestoneThreshold);
+          setAnchorHours(result.contract.resolutionHours);
           // Validate LLM value before setting — guards against unexpected enum values
           if (isLLMRecommendation(result.contract)) {
             const rec = result.contract.questionTypeRecommendation;
@@ -125,6 +178,22 @@ export default function CreateMarketPage() {
         router.push("/admin/markets");
       }
     });
+  }
+
+  function handleMilestoneSlider(rawValue: string) {
+    const value = Math.round(Number(rawValue));
+    setMilestoneThreshold(String(value));
+    if (anchorMilestone !== null && anchorHours !== null) {
+      setResolutionHours(snapToPreset(anchorHours * (value / anchorMilestone)));
+    }
+  }
+
+  function handleResolutionButton(hours: number) {
+    setResolutionHours(String(hours));
+    if (anchorMilestone !== null && anchorHours !== null) {
+      const raw = Math.round(anchorMilestone * (hours / anchorHours));
+      setMilestoneThreshold(String(Math.max(milestoneMin, Math.min(milestoneMax, raw))));
+    }
   }
 
   const llmContract =
@@ -219,6 +288,16 @@ export default function CreateMarketPage() {
           name="videoDescription"
           value={videoPreview?.description ?? ""}
         />
+        <input
+          type="hidden"
+          name="initialViewCount"
+          value={videoPreview?.viewCount ?? ""}
+        />
+        <input
+          type="hidden"
+          name="initialLikeCount"
+          value={videoPreview?.likeCount ?? ""}
+        />
 
         {/* Market title */}
         <div>
@@ -270,16 +349,38 @@ export default function CreateMarketPage() {
             <label className="block text-sm font-medium mb-1.5">
               Milestone Target
             </label>
-            <input
-              name="milestoneThreshold"
-              type="number"
-              required
-              min="1"
-              placeholder="e.g. 1000000"
-              value={milestoneThreshold}
-              onChange={(e) => setMilestoneThreshold(e.target.value)}
-              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent"
-            />
+            <input type="hidden" name="milestoneThreshold" value={milestoneThreshold} />
+            <div className="space-y-2 pt-1">
+              <div className="flex justify-between text-xs text-muted">
+                <span>
+                  {contractLoaded ? milestoneMin.toLocaleString() : "–"}
+                </span>
+                <span className="text-sm font-semibold text-foreground">
+                  {milestoneThreshold
+                    ? Number(milestoneThreshold).toLocaleString()
+                    : "–"}
+                </span>
+                <span>
+                  {contractLoaded ? milestoneMax.toLocaleString() : "–"}
+                </span>
+              </div>
+              <input
+                type="range"
+                disabled={!contractLoaded}
+                min={milestoneMin}
+                max={milestoneMax}
+                step={milestoneStep}
+                value={milestoneThreshold || "0"}
+                onChange={(e) => handleMilestoneSlider(e.target.value)}
+                className="w-full disabled:opacity-40 cursor-pointer"
+              />
+              {videoPreview && contractLoaded && (
+                <p className="text-xs text-muted">
+                  Current: {formatCount(currentAnalytics)}{" "}
+                  {questionType === "views" ? "views" : "likes"}
+                </p>
+              )}
+            </div>
           </div>
         </div>
 
@@ -289,17 +390,24 @@ export default function CreateMarketPage() {
             <label className="block text-sm font-medium mb-1.5">
               Resolution Window
             </label>
-            <select
-              name="resolutionHours"
-              value={resolutionHours}
-              onChange={(e) => setResolutionHours(e.target.value)}
-              className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent"
-            >
-              <option value="24">24 hours</option>
-              <option value="48">48 hours</option>
-              <option value="72">72 hours</option>
-              <option value="168">7 days</option>
-            </select>
+            <input type="hidden" name="resolutionHours" value={resolutionHours} />
+            <div className="flex gap-2">
+              {RESOLUTION_PRESETS.map((hours) => (
+                <button
+                  key={hours}
+                  type="button"
+                  disabled={!contractLoaded}
+                  onClick={() => handleResolutionButton(hours)}
+                  className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-40 ${
+                    resolutionHours === String(hours)
+                      ? "bg-accent text-white"
+                      : "bg-accent/10 text-accent hover:bg-accent/20"
+                  }`}
+                >
+                  {RESOLUTION_LABELS[hours]}
+                </button>
+              ))}
+            </div>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5">
@@ -339,7 +447,7 @@ export default function CreateMarketPage() {
 
         <button
           type="submit"
-          disabled={isPending || !videoPreview}
+          disabled={isPending || !videoPreview} // requires a loaded video; contract may be null if analytics fail
           className="w-full py-2.5 bg-accent hover:bg-accent-hover disabled:opacity-50 text-white font-medium rounded-lg transition-colors text-sm"
         >
           {isPending ? "Creating..." : "Create Market"}
