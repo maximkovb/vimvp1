@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "@/db";
-import { markets, priceSnapshots } from "@/db/schema";
+import { markets, priceSnapshots, youtubePolls } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { isAdmin } from "@/lib/admin";
@@ -18,14 +18,12 @@ import {
   generateContractPrediction,
   type VideoContext,
 } from "@/lib/prediction";
+import { YOUTUBE_THUMBNAIL_RE } from "@/lib/constants";
 
 const YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3";
 
 /** Fetch timeout — prevents hung calls from blocking the 30s worker budget. */
 const YT_TIMEOUT_MS = 8_000;
-
-/** Only accept YouTube CDN thumbnail URLs in DB writes. */
-const YOUTUBE_THUMBNAIL_RE = /^https:\/\/i\.ytimg\.com\//;
 
 // ─── YouTube API response shapes ────────────────────────────────────────────
 
@@ -214,7 +212,8 @@ export async function fetchVideoMetadata(url: string) {
         confidence,
         viewCount,
         videoAgeHours,
-        recentViewCounts
+        recentViewCounts,
+        mean
       );
     }
   } catch {
@@ -284,7 +283,8 @@ export async function createMarket(formData: FormData) {
   const thumbnailRaw = (formData.get("thumbnail") as string) || "";
   const channelTitle = (formData.get("channelTitle") as string) || "";
   const channelId = (formData.get("channelId") as string) || undefined;
-  const videoDescription = (formData.get("videoDescription") as string) || undefined;
+  const videoDescriptionRaw = (formData.get("videoDescription") as string) || undefined;
+  const videoDescription = videoDescriptionRaw?.slice(0, 5000) || undefined;
 
   // Only persist thumbnails from YouTube's CDN — rejects injected URLs.
   const thumbnail = YOUTUBE_THUMBNAIL_RE.test(thumbnailRaw) ? thumbnailRaw : "";
@@ -325,6 +325,18 @@ export async function createMarket(formData: FormData) {
       marketId,
       priceYes: prices[0].toFixed(6),
       priceNo: prices[1].toFixed(6),
+    });
+  }
+
+  // Insert initial poll row from the stats already fetched during video preview,
+  // so the trajectory chart is populated immediately on market creation.
+  const initialViewCount = parseInt(formData.get("initialViewCount") as string);
+  const initialLikeCount = parseInt(formData.get("initialLikeCount") as string);
+  if (!isNaN(initialViewCount) && !isNaN(initialLikeCount)) {
+    await db.insert(youtubePolls).values({
+      marketId,
+      viewCount: BigInt(initialViewCount),
+      likeCount: BigInt(initialLikeCount),
     });
   }
 

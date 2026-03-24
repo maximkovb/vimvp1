@@ -52,7 +52,7 @@ const PREDICTION_TOOL: Anthropic.Tool = {
       milestoneThreshold: {
         type: "integer",
         description:
-          "The 80th–85th percentile projected views or likes at resolutionHours — the value where only ~15–20% of similar-channel videos reach it. NOT the median or mean.",
+          "A genuinely challenging target — set at 1.5–2× the algorithmic projection provided in the prompt for the chosen resolutionHours. Must be ABOVE the projection, never below it.",
       },
       resolutionHours: {
         type: "integer",
@@ -90,34 +90,32 @@ const PREDICTION_TOOL: Anthropic.Tool = {
   },
 };
 
-// Prompt engineering for 85th-percentile calibration.
-// Target the value only ~15% of similar-channel videos reach — risky but attainable.
+// Prompt engineering for projection-anchored calibration.
+// Target ~1.5–2× the algorithmic projection so YES resolves ~35–50% of the time.
 const SYSTEM_PROMPT = `You are a calibrated viewership forecaster for a prediction market platform.
 
-GOAL: Set milestoneThreshold at the 80th–85th percentile of expected outcome for this channel — the value where only ~15–20% of this channel's videos reach it. This makes the bet risky but attainable. Do NOT use the median or mean; those produce markets that are too easy to win.
+GOAL: Set milestoneThreshold at a genuinely challenging level — roughly 1.5–2× the algorithmic projection provided in the prompt for the chosen resolution window. This produces markets where YES has a real chance of NOT resolving (target: 35–50% YES rate). Do NOT set the threshold below the algorithmic projection — that produces trivially easy markets.
 
 CALIBRATION APPROACH:
-1. Use the channel hit probability signal in the prompt (if provided) as your primary anchor.
-2. Reason about the distribution shape (log-normal? heavy-tailed? consistent?).
-3. Set milestoneThreshold at ~85th percentile — roughly 1-in-6 to 1-in-7 videos from this channel would reach it.
-4. If the video is already tracking above the channel average, adjust up accordingly.
+1. Read the "Algorithmic projection" lines in the prompt — these are your primary anchor.
+2. For high-confidence/consistent channels (outperformance factor ≥ 1.5, consistency high): use 1.8–2.0× the projection.
+3. For low-confidence/chaotic channels (outperformance factor < 1.0, consistency low): use 1.2–1.5× the projection.
+4. Cap the multiplier at 3× to avoid absurd thresholds for mega-channels.
 
 LMSR MARKET CONTEXT:
 - bParameter controls price sensitivity. b=75: ~$52 moves price 50%→75%. b=150: ~$104.
 - High confidence (consistent channel, established velocity) → lower b (75).
 - Low confidence (chaotic channel, very new video) → higher b (150).
 
-RESOLUTION WINDOW (rarity-first — use the channel hit probability signal):
-- P < 10% (rarer than 1-in-10): 168h
-- P 10–20% (1-in-5 to 1-in-10): 72h
-- P ≥ 20% (easier than 1-in-5): 48h
-- 24h: only for already-viral videos (12h+ old, tracking 3× channel average)
+RESOLUTION WINDOW (choose based on video characteristics, NOT milestone hit probability):
+- 24h: video is ≥12h old AND outperformance factor ≥ 3.0 (already viral — window closes soon)
+- 48h: video is <36h old AND outperformance factor ≥ 1.5 (strong early momentum)
+- 168h: category is music/tutorials OR channel consistency < 30% OR outperformance factor < 0.8 (slow-burn or chaotic — needs more time)
+- 72h: default for all other cases
 
 QUESTION TYPE:
 - "likes" when likeRatio > 3% AND content is music/meme/community-driven
-- "views" for most content
-
-The milestoneThreshold is a market bet — set it so only ~15% of similar videos from this channel would exceed it.`;
+- "views" for most content`;
 
 const ResponseSchema = z.object({
   // Pre-round floats before int check — Claude sometimes returns 524288.7
@@ -152,6 +150,18 @@ function sanitizeForPrompt(s: string, maxLen: number): string {
     .trim();
 }
 
+/** Logarithmic growth projection from current velocity to a future hour. */
+function projectViews(
+  currentViews: number,
+  videoAgeHours: number,
+  targetHours: number
+): number {
+  const safeAge = Math.max(videoAgeHours, 0.1);
+  return Math.round(
+    currentViews * (Math.log(targetHours + 1) / Math.log(safeAge + 1))
+  );
+}
+
 function buildUserPrompt(ctx: VideoContext): string {
   // Sanitize user-origin strings — strips structural chars before LLM embedding (prompt injection)
   const title = sanitizeForPrompt(ctx.videoTitle, 120);
@@ -172,6 +182,19 @@ function buildUserPrompt(ctx: VideoContext): string {
       ? +((1 - ctx.channelStdDev / ctx.channelAvgViews) * 100).toFixed(1)
       : 0;
 
+  // Outperformance factor: how this video compares to the channel baseline
+  // Guard against channelAvgViews = 0 (new channels with no history)
+  const outperformanceFactor =
+    ctx.channelAvgViews > 0
+      ? +(ctx.currentViews / ctx.channelAvgViews).toFixed(2)
+      : 1.0;
+
+  // Projections at each candidate window — give the LLM concrete anchors for threshold setting
+  const proj24 = projectViews(ctx.currentViews, ctx.videoAgeHours, 24);
+  const proj48 = projectViews(ctx.currentViews, ctx.videoAgeHours, 48);
+  const proj72 = projectViews(ctx.currentViews, ctx.videoAgeHours, 72);
+  const proj168 = projectViews(ctx.currentViews, ctx.videoAgeHours, 168);
+
   // Labeled text format — more readable for the LLM than raw JSON
   return [
     `Video: "${title}" by ${channel}`,
@@ -186,6 +209,13 @@ function buildUserPrompt(ctx: VideoContext): string {
     `Channel: ${ctx.subscriberCount.toLocaleString()} subscribers`,
     `Channel avg views per video: ${Math.round(ctx.channelAvgViews).toLocaleString()}`,
     `Channel consistency score: ${channelConsistencyPct}% (100% = perfectly consistent, 0% = chaotic)`,
+    `Outperformance factor: ${outperformanceFactor}x channel average`,
+    ``,
+    `Algorithmic projection (logarithmic growth from current velocity):`,
+    `  - At 24h: ${proj24.toLocaleString()} views`,
+    `  - At 48h: ${proj48.toLocaleString()} views`,
+    `  - At 72h: ${proj72.toLocaleString()} views`,
+    `  - At 168h: ${proj168.toLocaleString()} views`,
   ]
     .filter((line): line is string => line !== null)
     .join("\n");
