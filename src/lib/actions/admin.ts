@@ -317,8 +317,8 @@ export async function createMarket(formData: FormData) {
 
   const now = new Date();
   const hours = parseInt(resolutionHours || "72");
-  if (![24, 48, 72, 168].includes(hours)) {
-    return { error: "resolutionHours must be 24, 48, 72, or 168" };
+  if (![24, 48, 72].includes(hours)) {
+    return { error: "resolutionHours must be 24, 48, or 72" };
   }
   const resolvesAt = new Date(now.getTime() + hours * 60 * 60 * 1000);
   const haltsAt = new Date(resolvesAt.getTime() - 5 * 60 * 1000);

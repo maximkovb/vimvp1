@@ -6,7 +6,7 @@ export interface ContractRecommendation {
   riskTier: RiskTier;
   milestoneThreshold: number;
   bParameter: number;
-  resolutionHours: 24 | 48 | 72 | 168;
+  resolutionHours: 24 | 48 | 72;
 }
 
 export interface LLMContractRecommendation extends ContractRecommendation {
@@ -109,13 +109,13 @@ export function resolveWindow(
   videoAgeHours: number,
   outperformanceFactor: number,
   channelConsistency: number
-): 24 | 48 | 72 | 168 {
+): 24 | 48 | 72 {
   // Already viral — window closes soon, short deadline
   if (videoAgeHours >= 12 && outperformanceFactor >= 3.0) return 24;
   // Strong early momentum — medium window
   if (videoAgeHours < 36 && outperformanceFactor >= 1.5) return 48;
-  // Slow-burn or chaotic channel — needs more time
-  if (channelConsistency < 0.3 || outperformanceFactor < 0.8) return 168;
+  // Slow-burn or chaotic channel — cap at 72h (was 168h)
+  if (channelConsistency < 0.3 || outperformanceFactor < 0.8) return 72;
   // Default
   return 72;
 }

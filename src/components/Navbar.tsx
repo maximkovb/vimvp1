@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { auth } from "@/lib/auth";
+import { isAdmin } from "@/lib/admin";
 import { UserMenu } from "./UserMenu";
 
 export async function Navbar() {
   const session = await auth();
+  const admin = isAdmin(session);
 
   return (
     <nav className="border-b border-border bg-card">
@@ -39,6 +41,14 @@ export async function Navbar() {
         </div>
 
         <div className="flex items-center gap-3">
+          {admin && (
+            <Link
+              href="/admin/markets/new"
+              className="px-4 py-1.5 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              + Create Market
+            </Link>
+          )}
           {session?.user ? (
             <UserMenu user={session.user} />
           ) : (

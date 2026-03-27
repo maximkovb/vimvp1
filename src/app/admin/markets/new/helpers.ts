@@ -1,4 +1,4 @@
-const RESOLUTION_PRESETS = [24, 48, 72, 168] as const;
+const RESOLUTION_PRESETS = [24, 48, 72] as const;
 
 /**
  * Snap proportional hours to the nearest resolution preset (linear distance).

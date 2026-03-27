@@ -56,7 +56,7 @@ const PREDICTION_TOOL: Anthropic.Tool = {
       },
       resolutionHours: {
         type: "integer",
-        enum: [24, 48, 72, 168],
+        enum: [24, 48, 72],
       },
       bParameter: {
         type: "integer",
@@ -110,8 +110,7 @@ LMSR MARKET CONTEXT:
 RESOLUTION WINDOW (choose based on video characteristics, NOT milestone hit probability):
 - 24h: video is ≥12h old AND outperformance factor ≥ 3.0 (already viral — window closes soon)
 - 48h: video is <36h old AND outperformance factor ≥ 1.5 (strong early momentum)
-- 168h: category is music/tutorials OR channel consistency < 30% OR outperformance factor < 0.8 (slow-burn or chaotic — needs more time)
-- 72h: default for all other cases
+- 72h: default for all other cases including slow-burn or chaotic channels (hard maximum — never exceed 72h)
 
 QUESTION TYPE:
 - "likes" when likeRatio > 3% AND content is music/meme/community-driven
@@ -123,12 +122,7 @@ const ResponseSchema = z.object({
     .number()
     .transform(Math.round)
     .pipe(z.number().int().min(1).max(10_000_000_000)),
-  resolutionHours: z.union([
-    z.literal(24),
-    z.literal(48),
-    z.literal(72),
-    z.literal(168),
-  ]),
+  resolutionHours: z.union([z.literal(24), z.literal(48), z.literal(72)]),
   // coerce handles string-typed numbers; clamp handles out-of-range values
   bParameter: z
     .coerce.number()
@@ -193,7 +187,6 @@ function buildUserPrompt(ctx: VideoContext): string {
   const proj24 = projectViews(ctx.currentViews, ctx.videoAgeHours, 24);
   const proj48 = projectViews(ctx.currentViews, ctx.videoAgeHours, 48);
   const proj72 = projectViews(ctx.currentViews, ctx.videoAgeHours, 72);
-  const proj168 = projectViews(ctx.currentViews, ctx.videoAgeHours, 168);
 
   // Labeled text format — more readable for the LLM than raw JSON
   return [
@@ -215,7 +208,6 @@ function buildUserPrompt(ctx: VideoContext): string {
     `  - At 24h: ${proj24.toLocaleString()} views`,
     `  - At 48h: ${proj48.toLocaleString()} views`,
     `  - At 72h: ${proj72.toLocaleString()} views`,
-    `  - At 168h: ${proj168.toLocaleString()} views`,
   ]
     .filter((line): line is string => line !== null)
     .join("\n");

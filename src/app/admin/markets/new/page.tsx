@@ -13,12 +13,11 @@ import { isLLMRecommendation } from "@/lib/contract";
 import { snapToPreset, computeStep, computeMilestoneFloor, computeMilestoneMax } from "./helpers";
 import { formatCount } from "@/lib/format";
 
-const RESOLUTION_PRESETS = [24, 48, 72, 168] as const;
+const RESOLUTION_PRESETS = [24, 48, 72] as const;
 const RESOLUTION_LABELS: Record<(typeof RESOLUTION_PRESETS)[number], string> = {
   24: "24h",
   48: "48h",
   72: "72h",
-  168: "7d",
 };
 
 const RISK_BADGE_STYLES: Record<RiskTier, string> = {
@@ -146,12 +145,14 @@ export default function CreateMarketPage() {
             result.contract.milestoneThreshold,
             result.viewCount
           );
+          // Guard: cap anchorHours at 72 in case of in-flight responses during deploy
+          const safeResolutionHours = Math.min(result.contract.resolutionHours, 72) as 24 | 48 | 72;
           setMilestoneThreshold(String(clampedMilestone));
           setBParameter(String(result.contract.bParameter));
-          setResolutionHours(String(result.contract.resolutionHours));
+          setResolutionHours(String(safeResolutionHours));
           setRiskTier(result.contract.riskTier);
           setAnchorMilestone(clampedMilestone);
-          setAnchorHours(result.contract.resolutionHours);
+          setAnchorHours(safeResolutionHours);
           // Validate LLM value before setting — guards against unexpected enum values
           if (isLLMRecommendation(result.contract)) {
             const rec = result.contract.questionTypeRecommendation;
