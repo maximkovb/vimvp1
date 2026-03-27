@@ -6,6 +6,12 @@ import {
   resolveWindow,
   calculateContractRecommendations,
 } from "../contract";
+import {
+  projectVelocity,
+  channelAvgAtHorizon,
+  computeExpectedOutcome,
+  computeCalibrationProbability,
+} from "../calibration";
 
 describe("assignRiskTier()", () => {
   it("returns 'low' at and above 70", () => {
@@ -102,60 +108,116 @@ describe("roundToClean()", () => {
 });
 
 describe("resolveWindow()", () => {
-  it("returns 24h for viral video (≥12h old, factor ≥ 3.0)", () => {
-    expect(resolveWindow(12, 3.0, 0.8)).toBe(24);
-    expect(resolveWindow(24, 5.0, 0.9)).toBe(24);
+  it("returns 24h for a fresh video (< 20h old)", () => {
+    expect(resolveWindow(0, 1.0, 0.8)).toBe(24);
+    expect(resolveWindow(10, 1.0, 0.8)).toBe(24);
+    expect(resolveWindow(19.9, 1.0, 0.8)).toBe(24);
   });
 
-  it("does NOT return 24h if video is younger than 12h", () => {
-    expect(resolveWindow(11.9, 3.0, 0.8)).not.toBe(24);
+  it("returns 48h when video is 20–43h old", () => {
+    expect(resolveWindow(20, 1.0, 0.8)).toBe(48);
+    expect(resolveWindow(30, 0.5, 0.3)).toBe(48);
+    expect(resolveWindow(43.9, 1.2, 0.7)).toBe(48);
   });
 
-  it("does NOT return 24h if outperformance factor is below 3.0", () => {
-    expect(resolveWindow(12, 2.9, 0.8)).not.toBe(24);
-  });
-
-  it("returns 48h for young video with strong momentum (<36h, factor ≥ 1.5)", () => {
-    expect(resolveWindow(6, 1.5, 0.7)).toBe(48);
-    expect(resolveWindow(35, 2.0, 0.8)).toBe(48);
-  });
-
-  it("does NOT return 48h if video is ≥36h old", () => {
-    expect(resolveWindow(36, 2.0, 0.8)).not.toBe(48);
-  });
-
-  it("returns 168h for chaotic channel (consistency < 0.3)", () => {
-    expect(resolveWindow(48, 1.0, 0.29)).toBe(168);
-  });
-
-  it("returns 168h for underperforming video (factor < 0.8)", () => {
-    expect(resolveWindow(48, 0.79, 0.6)).toBe(168);
-  });
-
-  it("returns 72h as the default", () => {
-    expect(resolveWindow(48, 1.2, 0.7)).toBe(72);
+  it("returns 72h when video is 44h or older", () => {
+    expect(resolveWindow(44, 1.0, 0.8)).toBe(72);
+    expect(resolveWindow(48, 1.0, 0.29)).toBe(72); // was 168h — now 72h (hard cap)
+    expect(resolveWindow(48, 0.79, 0.6)).toBe(72); // was 168h — now 72h (hard cap)
     expect(resolveWindow(100, 1.0, 0.5)).toBe(72);
+  });
+
+  it("returns 72h as the default for old videos regardless of performance", () => {
+    expect(resolveWindow(48, 1.2, 0.7)).toBe(72);
+    expect(resolveWindow(50, 5.0, 0.99)).toBe(72); // viral but old → 72h
+  });
+
+  it("resolutionHours is always a valid value (24, 48, or 72)", () => {
+    const valid = new Set([24, 48, 72]);
+    for (const confidence of [80, 55, 20]) {
+      const result = calculateContractRecommendations(
+        confidence,
+        500_000,
+        10,
+        Array(10).fill(1_000_000)
+      );
+      expect(valid.has(result.resolutionHours)).toBe(true);
+    }
   });
 });
 
+// ── calibration.ts unit tests ─────────────────────────────────────────────────
+
+describe("projectVelocity()", () => {
+  it("projects forward from current velocity using logarithmic growth", () => {
+    // 100K views at 10h → project to 24h
+    const p = projectVelocity(100_000, 10, 24);
+    const expected = Math.round(100_000 * (Math.log(25) / Math.log(11)));
+    expect(p).toBe(expected);
+  });
+
+  it("clamps video age to 0.1 to avoid log(0)", () => {
+    expect(() => projectVelocity(100_000, 0, 24)).not.toThrow();
+    expect(projectVelocity(100_000, 0, 24)).toBeGreaterThan(0);
+  });
+});
+
+describe("channelAvgAtHorizon()", () => {
+  it("returns 55% of channel avg for 24h window", () => {
+    expect(channelAvgAtHorizon(400_000, 24)).toBe(Math.round(400_000 * 0.55));
+  });
+
+  it("returns 80% of channel avg for 48h window", () => {
+    expect(channelAvgAtHorizon(400_000, 48)).toBe(Math.round(400_000 * 0.8));
+  });
+
+  it("returns 100% of channel avg for 72h window", () => {
+    expect(channelAvgAtHorizon(400_000, 72)).toBe(400_000);
+  });
+});
+
+describe("computeExpectedOutcome()", () => {
+  it("returns channel baseline when it exceeds velocity projection", () => {
+    // Channel avg 400K, video only has 30K views at 2h old — velocity is slow
+    // channelAvgAtHorizon(400K, 72) = 400K; velocity projection will be much lower
+    const velocity = projectVelocity(30_000, 2, 72);
+    const channelFloor = channelAvgAtHorizon(400_000, 72); // 400K
+    const expected = computeExpectedOutcome(30_000, 2, 72, 400_000);
+    expect(expected).toBe(Math.max(velocity, channelFloor));
+    expect(expected).toBe(channelFloor); // channel floor dominates
+  });
+
+  it("returns velocity projection when it exceeds channel baseline", () => {
+    // Trending video: 1M views at 5h on a 50K avg channel
+    const velocity = projectVelocity(1_000_000, 5, 24);
+    const channelFloor = channelAvgAtHorizon(50_000, 24); // 27.5K
+    const expected = computeExpectedOutcome(1_000_000, 5, 24, 50_000);
+    expect(expected).toBe(Math.max(velocity, channelFloor));
+    expect(expected).toBe(velocity); // velocity dominates
+  });
+
+  it("degrades to velocity-only when channelAvgViews is 0", () => {
+    const velocity = projectVelocity(200_000, 6, 48);
+    const expected = computeExpectedOutcome(200_000, 6, 48, 0);
+    expect(expected).toBe(velocity);
+  });
+});
+
+describe("computeCalibrationProbability()", () => {
+  it("returns expectedOutcome / milestone clamped to [0, 1]", () => {
+    expect(computeCalibrationProbability(300_000, 1_000_000)).toBeCloseTo(0.3);
+    expect(computeCalibrationProbability(1_000_000, 500_000)).toBe(1); // clamped
+    expect(computeCalibrationProbability(0, 500_000)).toBe(0.5); // degenerate
+  });
+});
+
+// ── calculateContractRecommendations() ───────────────────────────────────────
+
 describe("calculateContractRecommendations()", () => {
-  // A consistent mid-tier channel: confidence=80 → low risk
   const consistentViews = Array(10).fill(1_000_000);
 
-  // Helper: compute logarithmic projection (mirrors contract.ts formula)
-  function project(
-    currentViews: number,
-    videoAgeHours: number,
-    window: number
-  ): number {
-    const safeAge = Math.max(videoAgeHours, 0.1);
-    return Math.round(
-      currentViews * (Math.log(window + 1) / Math.log(safeAge + 1))
-    );
-  }
-
-  it("low-risk tier applies ≥ 2.0× multiplier on projection", () => {
-    // confidence=80 → low; age=6h in sweet spot; consistent channel
+  it("low-risk tier applies 3.0× multiplier on expectedOutcome", () => {
+    // confidence=80 → low risk; age=6h; consistent channel avg 1M
     const result = calculateContractRecommendations(
       80,
       500_000,
@@ -163,14 +225,12 @@ describe("calculateContractRecommendations()", () => {
       consistentViews
     );
     expect(result.riskTier).toBe("low");
-    const window = result.resolutionHours;
-    const proj = project(500_000, 6, window);
-    // threshold should be at least 2× the raw projection (before rounding)
-    expect(result.milestoneThreshold).toBeGreaterThanOrEqual(proj * 2.0 * 0.9); // 10% rounding tolerance
+    const expected = computeExpectedOutcome(500_000, 6, result.resolutionHours, 1_000_000);
+    // milestone should be approx 3.0× expectedOutcome (with rounding tolerance)
+    expect(result.milestoneThreshold).toBeGreaterThanOrEqual(expected * 3.0 * 0.9);
   });
 
-  it("medium-risk tier applies ≥ 1.5× multiplier on projection", () => {
-    // confidence=55 → medium; chaotic channel (low consistency → 168h window)
+  it("medium-risk tier applies 2.5× multiplier on expectedOutcome", () => {
     const chaoticViews = [100_000, 900_000, 200_000, 800_000, 150_000];
     const result = calculateContractRecommendations(
       55,
@@ -179,13 +239,12 @@ describe("calculateContractRecommendations()", () => {
       chaoticViews
     );
     expect(result.riskTier).toBe("medium");
-    const window = result.resolutionHours;
-    const proj = project(300_000, 8, window);
-    expect(result.milestoneThreshold).toBeGreaterThanOrEqual(proj * 1.5 * 0.9);
+    const avg = chaoticViews.reduce((a, b) => a + b, 0) / chaoticViews.length;
+    const expected = computeExpectedOutcome(300_000, 8, result.resolutionHours, avg);
+    expect(result.milestoneThreshold).toBeGreaterThanOrEqual(expected * 2.5 * 0.9);
   });
 
-  it("high-risk tier applies ≥ 1.2× multiplier on projection", () => {
-    // confidence=20 → high
+  it("high-risk tier applies 2.2× multiplier on expectedOutcome", () => {
     const result = calculateContractRecommendations(
       20,
       200_000,
@@ -193,32 +252,59 @@ describe("calculateContractRecommendations()", () => {
       consistentViews
     );
     expect(result.riskTier).toBe("high");
-    const window = result.resolutionHours;
-    const proj = project(200_000, 10, window);
-    expect(result.milestoneThreshold).toBeGreaterThanOrEqual(proj * 1.2 * 0.9);
+    const expected = computeExpectedOutcome(200_000, 10, result.resolutionHours, 1_000_000);
+    expect(result.milestoneThreshold).toBeGreaterThanOrEqual(expected * 2.2 * 0.9);
   });
 
-  it("threshold is always above the raw projection (never trivially easy)", () => {
-    const cases: [number, number, number, number[]][] = [
-      [80, 1_000_000, 6, consistentViews],
-      [55, 500_000, 12, consistentViews],
-      [20, 200_000, 24, consistentViews],
+  it("milestone always exceeds channel avg at window horizon (channel-as-floor invariant)", () => {
+    // Channel avg 400K — milestone must exceed channelAvgAtHorizon regardless of velocity
+    const lowVelocityViews = 20_000; // video is slow but channel is big
+    const channelAvg = 400_000;
+    const result = calculateContractRecommendations(
+      80,
+      lowVelocityViews,
+      5, // 5h old → 24h window
+      consistentViews,
+      channelAvg
+    );
+    const floor = channelAvgAtHorizon(channelAvg, result.resolutionHours);
+    expect(result.milestoneThreshold).toBeGreaterThan(floor);
+  });
+
+  it("estimated probability targets 25–45% range", () => {
+    const cases: [number, number, number, number, number[]][] = [
+      [80, 500_000, 6, 1_000_000, consistentViews],
+      [55, 300_000, 8, 500_000, consistentViews],
+      [20, 200_000, 10, 400_000, consistentViews],
     ];
-    for (const [confidence, views, age, recent] of cases) {
+    for (const [confidence, views, age, channelAvg, recent] of cases) {
       const result = calculateContractRecommendations(
         confidence,
         views,
         age,
-        recent
+        recent,
+        channelAvg
       );
-      const proj = project(views, age, result.resolutionHours);
-      expect(result.milestoneThreshold).toBeGreaterThan(proj);
+      // Probability should be in 25–45% range (with some tolerance for rounding)
+      expect(result.estimatedProbability).toBeGreaterThanOrEqual(0.20);
+      expect(result.estimatedProbability).toBeLessThanOrEqual(0.55);
     }
   });
 
+  it("uses channelAvgViews for outperformance computation when provided", () => {
+    // With the new age-based resolveWindow, a 5h old video → 24h window regardless of perf
+    const result = calculateContractRecommendations(
+      80,
+      1_000_000,
+      5,
+      consistentViews,
+      500_000
+    );
+    expect(result.resolutionHours).toBe(24); // age=5h < 20h → 24h window
+  });
+
   it("all three tiers set predictionSource to 'algorithmic'", () => {
-    const tiers = [80, 55, 20];
-    for (const confidence of tiers) {
+    for (const confidence of [80, 55, 20]) {
       const result = calculateContractRecommendations(
         confidence,
         500_000,
@@ -226,32 +312,6 @@ describe("calculateContractRecommendations()", () => {
         consistentViews
       );
       expect(result.predictionSource).toBe("algorithmic");
-    }
-  });
-
-  it("uses channelAvgViews for outperformance factor when provided", () => {
-    // Video is 2× channel avg → outperformanceFactor=2 → strong momentum early → 48h expected
-    // confidence=80 (low risk), age=5h (<36h), factor=2 (≥1.5) → resolveWindow → 48h
-    const result = calculateContractRecommendations(
-      80,
-      1_000_000,
-      5,
-      consistentViews,
-      500_000 // channelAvgViews: video is 2× avg
-    );
-    expect(result.resolutionHours).toBe(48);
-  });
-
-  it("resolutionHours is always a valid enum value", () => {
-    const valid = new Set([24, 48, 72, 168]);
-    for (const confidence of [80, 55, 20]) {
-      const result = calculateContractRecommendations(
-        confidence,
-        500_000,
-        10,
-        consistentViews
-      );
-      expect(valid.has(result.resolutionHours)).toBe(true);
     }
   });
 });

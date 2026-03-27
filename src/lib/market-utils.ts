@@ -1,4 +1,8 @@
 import { allPrices } from "@/lib/lmsr";
+import {
+  computeExpectedOutcome,
+  computeCalibrationProbability,
+} from "./calibration";
 
 /**
  * Milestone slider floor: max(0.1× anchor, ceil(currentAnalytics × 1.2)).
@@ -12,11 +16,28 @@ export function computeMilestoneFloor(anchor: number, currentAnalytics: number):
 }
 
 /**
- * Milestone slider ceiling: max(5× anchor, ceil(currentAnalytics × 1.5)).
- * Raised dynamically so the floor never exceeds the ceiling for already-viral videos.
+ * Client-side probability estimate using the shared calibration model.
+ * Uses computeExpectedOutcome (max of velocity projection and channel baseline at horizon)
+ * so the live display matches the same formula used by both generation paths.
+ *
+ * @param channelAvgViews - Pass 0 or omit when channel data is unavailable; degrades to
+ *   velocity-only projection (same as the old formula).
  */
-export function computeMilestoneMax(anchor: number, currentAnalytics: number): number {
-  return Math.max(Math.round(anchor * 5), Math.ceil(currentAnalytics * 1.5));
+export function computeProbability(
+  currentAnalytics: number,
+  videoAgeHours: number,
+  windowHours: number,
+  milestone: number,
+  channelAvgViews = 0
+): number {
+  if (currentAnalytics <= 0 || milestone <= 0 || windowHours <= 0) return 0.5;
+  const expected = computeExpectedOutcome(
+    currentAnalytics,
+    videoAgeHours,
+    windowHours,
+    channelAvgViews
+  );
+  return computeCalibrationProbability(expected, milestone);
 }
 
 export function getMarketPrices(market: {

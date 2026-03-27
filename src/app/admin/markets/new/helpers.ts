@@ -18,4 +18,4 @@ export function computeStep(anchor: number): number {
 }
 
 // Re-exported from the shared lib so this module remains the single import point for page.tsx.
-export { computeMilestoneFloor, computeMilestoneMax } from "../../../../lib/market-utils";
+export { computeMilestoneFloor, computeProbability } from "../../../../lib/market-utils";

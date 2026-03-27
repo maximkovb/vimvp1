@@ -1,14 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { snapToPreset, computeStep, computeMilestoneFloor, computeMilestoneMax } from "../helpers";
+import { snapToPreset, computeStep, computeMilestoneFloor } from "../helpers";
 
 describe("snapToPreset", () => {
   it("snaps to exact match", () => {
-    expect(snapToPreset(168)).toBe("168");
     expect(snapToPreset(72)).toBe("72");
+    expect(snapToPreset(48)).toBe("48");
     expect(snapToPreset(24)).toBe("24");
   });
 
-  it("snaps to nearest preset (closer to 72 than 168)", () => {
+  it("snaps to nearest preset (72 is closest to 110 among 24/48/72)", () => {
     expect(snapToPreset(110)).toBe("72");
   });
 
@@ -20,8 +20,8 @@ describe("snapToPreset", () => {
     expect(snapToPreset(1)).toBe("24");
   });
 
-  it("snaps values above the largest preset to 168", () => {
-    expect(snapToPreset(999)).toBe("168");
+  it("snaps values above the largest preset to 72", () => {
+    expect(snapToPreset(999)).toBe("72");
   });
 });
 
@@ -67,24 +67,5 @@ describe("computeMilestoneFloor", () => {
 
   it("zero analytics falls back to 0.1× anchor", () => {
     expect(computeMilestoneFloor(500_000, 0)).toBe(50_000);
-  });
-});
-
-describe("computeMilestoneMax", () => {
-  it("uses 5× anchor when current analytics ceiling is lower", () => {
-    // anchor=100000 (5× = 500000), current=0 → max = 500000
-    expect(computeMilestoneMax(100_000, 0)).toBe(500_000);
-  });
-
-  it("raises ceiling above 5× anchor when current analytics × 1.5 is larger", () => {
-    // anchor=100000 (5× = 500000), current=400000 (1.5× = 600000) → max = 600000
-    expect(computeMilestoneMax(100_000, 400_000)).toBe(600_000);
-  });
-
-  it("ceiling always exceeds floor for an already-viral video", () => {
-    // anchor=100000, current=1000000 → floor = max(10000, 1200000) = 1200000; ceiling = max(500000, 1500000) = 1500000
-    const floor = computeMilestoneFloor(100_000, 1_000_000);
-    const max = computeMilestoneMax(100_000, 1_000_000);
-    expect(max).toBeGreaterThan(floor);
   });
 });

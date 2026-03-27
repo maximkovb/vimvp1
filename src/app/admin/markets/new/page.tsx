@@ -2,16 +2,13 @@
 
 import { useState, useRef, useTransition, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { fetchVideoMetadata, createMarket } from "@/lib/actions/admin";
-import type {
-  RiskTier,
-  ContractRecommendation,
-  LLMContractRecommendation,
-} from "@/lib/contract";
+import { fetchVideoStats, generateMarketSuggestion, createMarket } from "@/lib/actions/admin";
+import type { RiskTier, ContractRecommendation, LLMContractRecommendation } from "@/lib/contract";
 import { isLLMRecommendation } from "@/lib/contract";
 
-import { snapToPreset, computeStep, computeMilestoneFloor, computeMilestoneMax } from "./helpers";
+import { snapToPreset, computeStep, computeMilestoneFloor, computeProbability } from "./helpers";
 import { formatCount } from "@/lib/format";
+import { MarketStatsPanel } from "@/components/admin/MarketStatsPanel";
 
 const RESOLUTION_PRESETS = [24, 48, 72] as const;
 const RESOLUTION_LABELS: Record<(typeof RESOLUTION_PRESETS)[number], string> = {
@@ -33,68 +30,98 @@ const RISK_LABELS: Record<RiskTier, string> = {
 
 function RiskBadge({ tier }: { tier: RiskTier }) {
   return (
-    <span
-      className={`text-xs font-semibold px-2 py-0.5 rounded-full ${RISK_BADGE_STYLES[tier]}`}
-    >
+    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${RISK_BADGE_STYLES[tier]}`}>
       {RISK_LABELS[tier]}
     </span>
   );
 }
 
+function ProbabilityBadge({ probability }: { probability: number }) {
+  const pct = Math.round(probability * 100);
+  const isCalibrated = probability >= 0.4 && probability <= 0.6;
+  return (
+    <span
+      className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
+        isCalibrated
+          ? "bg-green-500/10 text-green-600 border-green-500/20"
+          : "bg-yellow-500/10 text-yellow-600 border-yellow-500/20"
+      }`}
+    >
+      {pct}% YES {isCalibrated ? "✓" : "⚠"}
+    </span>
+  );
+}
+
+type VideoStatsData = {
+  videoId: string;
+  title: string;
+  thumbnail: string;
+  channelTitle: string;
+  channelId: string;
+  description: string;
+  viewCount: number;
+  likeCount: number;
+  publishedAt: string;
+  categoryId?: string;
+};
+
+type SuggestionData = {
+  contract: ContractRecommendation | LLMContractRecommendation | null;
+  suggestedTitle: string | null;
+  videoAgeHours: number;
+  subscriberCount: number;
+  channelAvgViews: number;
+  duplicateWarning: boolean;
+};
+
 export default function CreateMarketPage() {
   const router = useRouter();
   const [videoUrl, setVideoUrl] = useState("");
-  const [videoPreview, setVideoPreview] = useState<{
-    videoId: string;
-    title: string;
-    thumbnail: string;
-    channelTitle: string;
-    channelId: string;
-    description: string;
-    viewCount: number;
-    likeCount: number;
-    contract: ContractRecommendation | LLMContractRecommendation | null;
-  } | null>(null);
+
+  // Phase 1 state
+  const [videoStats, setVideoStats] = useState<VideoStatsData | null>(null);
+  const [isFetchingStats, setIsFetchingStats] = useState(false);
+
+  // Phase 2 state
+  const [suggestion, setSuggestion] = useState<SuggestionData | null>(null);
+  const [isGeneratingSuggestion, setIsGeneratingSuggestion] = useState(false);
+
   const [error, setError] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
   const [isPending, startTransition] = useTransition();
 
-  // Contract fields — controlled so they can be auto-populated from analytics.
+  // Contract fields — controlled so they can be auto-populated from analytics
   const [milestoneThreshold, setMilestoneThreshold] = useState("");
   const [bParameter, setBParameter] = useState("100");
   const [resolutionHours, setResolutionHours] = useState("");
   const [riskTier, setRiskTier] = useState<RiskTier | null>(null);
   const [questionType, setQuestionType] = useState<"views" | "likes">("views");
+  const [titleValue, setTitleValue] = useState("");
 
-  // Anchor — the original AI recommendation, used as fixed reference for proportional adjustments.
+  // Live probability — updated on any override after suggestion loads
+  const [liveProbability, setLiveProbability] = useState<number | null>(null);
+
+  // Anchor — original AI recommendation used as fixed reference for proportional adjustments
   const [anchorMilestone, setAnchorMilestone] = useState<number | null>(null);
   const [anchorHours, setAnchorHours] = useState<number | null>(null);
 
-  // Derived: true once a contract recommendation has loaded. Used to gate proportional controls
-  // and form submission separately from the anchor values used for math.
   const contractLoaded = anchorMilestone !== null;
-  // Current analytics for the active metric — drives the 20% floor.
+
   const currentAnalytics =
     questionType === "views"
-      ? (videoPreview?.viewCount ?? 0)
-      : (videoPreview?.likeCount ?? 0);
+      ? (videoStats?.viewCount ?? 0)
+      : (videoStats?.likeCount ?? 0);
 
-  // Milestone slider bounds:
-  //   floor = max(0.1× anchor, ceil(currentAnalytics × 1.2)) — target must require future growth.
-  //   ceiling = max(5× anchor, ceil(currentAnalytics × 1.5)) — guarantees headroom above the floor.
   const milestoneFloor = contractLoaded
     ? computeMilestoneFloor(anchorMilestone!, currentAnalytics)
     : 0;
-  const milestoneMax = contractLoaded
-    ? computeMilestoneMax(anchorMilestone!, currentAnalytics)
-    : 100;
+  // Soft UI max for slider drag range only — not a hard ceiling.
+  // Admin can type any value; the live probability display is the guardrail.
+  const milestoneMax = contractLoaded ? Math.round(anchorMilestone! * 5) : 100;
   const milestoneStep = contractLoaded
     ? computeStep(Math.max(milestoneFloor, anchorMilestone!))
     : 1;
 
-  // Re-clamp milestone when questionType switches or floor shifts (e.g. after a re-fetch).
-  // milestoneThreshold is intentionally absent from the dep array — it is read for comparison
-  // only. Adding it would re-fire this effect on every slider move, fighting user input.
+  // Re-clamp milestone when questionType switches or floor shifts
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!anchorMilestone || !milestoneThreshold) return;
@@ -103,19 +130,34 @@ export default function CreateMarketPage() {
     }
   }, [questionType, milestoneFloor]);
 
+  // Recompute live probability whenever relevant fields change.
+  // Passes channelAvgViews so the display uses the channel-baseline-floor formula,
+  // matching the same calibration model used by both generation paths.
+  useEffect(() => {
+    if (!suggestion || !milestoneThreshold || !resolutionHours) return;
+    const prob = computeProbability(
+      currentAnalytics,
+      suggestion.videoAgeHours,
+      Number(resolutionHours),
+      Number(milestoneThreshold),
+      suggestion.channelAvgViews
+    );
+    setLiveProbability(prob);
+  }, [milestoneThreshold, resolutionHours, currentAnalytics, suggestion]);
+
   // Cancellation token — prevents a stale first-fetch response from overwriting
   // form state set by a second fetch that completed first.
   const fetchTokenRef = useRef<{ canceled: boolean } | null>(null);
 
   async function handleFetchVideo() {
-    // Cancel any in-flight fetch
     if (fetchTokenRef.current) fetchTokenRef.current.canceled = true;
     const token = { canceled: false };
     fetchTokenRef.current = token;
 
-    // All resets happen synchronously before the await
+    // All resets happen synchronously before the first await
     setError("");
-    setVideoPreview(null);
+    setVideoStats(null);
+    setSuggestion(null);
     setRiskTier(null);
     setMilestoneThreshold("");
     setBParameter("100");
@@ -123,46 +165,74 @@ export default function CreateMarketPage() {
     setQuestionType("views");
     setAnchorMilestone(null);
     setAnchorHours(null);
-    setIsLoading(true);
+    setTitleValue("");
+    setLiveProbability(null);
 
-    if (!videoUrl) {
-      setIsLoading(false);
-      return;
-    }
+    if (!videoUrl.trim()) return;
 
     try {
-      const result = await fetchVideoMetadata(videoUrl);
-      if (token.canceled) return; // stale response — discard
+      // Phase 1: fast video stats (~500ms)
+      setIsFetchingStats(true);
+      const statsResult = await fetchVideoStats(videoUrl);
+      if (token.canceled) return;
+      setIsFetchingStats(false);
 
-      if ("error" in result) {
-        setError(result.error ?? "Unknown error");
-      } else {
-        if (result.contract) {
-          // Clamp to the 20% floor (questionType resets to "views" at fetch start).
-          // Anchor is set to the clamped value — not the raw AI recommendation — so
-          // proportional slider/resolution math stays correct when floor > AI recommendation.
-          const clampedMilestone = computeMilestoneFloor(
-            result.contract.milestoneThreshold,
-            result.viewCount
-          );
-          // Guard: cap anchorHours at 72 in case of in-flight responses during deploy
-          const safeResolutionHours = Math.min(result.contract.resolutionHours, 72) as 24 | 48 | 72;
-          setMilestoneThreshold(String(clampedMilestone));
-          setBParameter(String(result.contract.bParameter));
-          setResolutionHours(String(safeResolutionHours));
-          setRiskTier(result.contract.riskTier);
-          setAnchorMilestone(clampedMilestone);
-          setAnchorHours(safeResolutionHours);
-          // Validate LLM value before setting — guards against unexpected enum values
-          if (isLLMRecommendation(result.contract)) {
-            const rec = result.contract.questionTypeRecommendation;
-            setQuestionType(rec === "likes" ? "likes" : "views");
-          }
-        }
-        setVideoPreview(result);
+      if ("error" in statsResult) {
+        setError(statsResult.error ?? "Unknown error");
+        return;
       }
+      setVideoStats(statsResult);
+
+      // Phase 2: channel analytics + market suggestion (~5–15s)
+      setIsGeneratingSuggestion(true);
+      const suggestionResult = await generateMarketSuggestion({
+        videoId: statsResult.videoId,
+        title: statsResult.title,
+        channelId: statsResult.channelId,
+        channelTitle: statsResult.channelTitle,
+        publishedAt: statsResult.publishedAt,
+        categoryId: statsResult.categoryId,
+        viewCount: statsResult.viewCount,
+        likeCount: statsResult.likeCount,
+      });
+      if (token.canceled) return;
+      setIsGeneratingSuggestion(false);
+
+      if ("error" in suggestionResult) {
+        setError(suggestionResult.error ?? "Unknown error");
+        return;
+      }
+      setSuggestion(suggestionResult);
+
+      if (suggestionResult.contract) {
+        const aiMilestone = suggestionResult.contract.milestoneThreshold;
+        const clampedMilestone = computeMilestoneFloor(aiMilestone, statsResult.viewCount);
+        const safeResolutionHours = suggestionResult.contract.resolutionHours;
+        setMilestoneThreshold(String(clampedMilestone));
+        setBParameter(String(suggestionResult.contract.bParameter));
+        setResolutionHours(String(safeResolutionHours));
+        setRiskTier(suggestionResult.contract.riskTier);
+        // Anchor is the raw AI suggestion — used as reference for proportional scaling.
+        // The initial displayed value may be floor-clamped, but the anchor stays at AI intent.
+        setAnchorMilestone(aiMilestone);
+        setAnchorHours(safeResolutionHours);
+        if (isLLMRecommendation(suggestionResult.contract)) {
+          const rec = suggestionResult.contract.questionTypeRecommendation;
+          setQuestionType(rec === "likes" ? "likes" : "views");
+        }
+      }
+
+      if (suggestionResult.suggestedTitle) {
+        setTitleValue(suggestionResult.suggestedTitle);
+      }
+    } catch (err) {
+      if (token.canceled) return;
+      setError(err instanceof Error ? err.message : "Failed to fetch video");
     } finally {
-      if (!token.canceled) setIsLoading(false);
+      if (!token.canceled) {
+        setIsFetchingStats(false);
+        setIsGeneratingSuggestion(false);
+      }
     }
   }
 
@@ -173,10 +243,7 @@ export default function CreateMarketPage() {
     startTransition(async () => {
       const formData = new FormData(e.currentTarget);
       formData.set("videoUrl", videoUrl);
-      formData.set(
-        "publishImmediately",
-        formData.get("publishImmediately") ? "true" : "false"
-      );
+      formData.set("publishImmediately", "true");
 
       const result = await createMarket(formData);
       if ("error" in result) {
@@ -199,14 +266,30 @@ export default function CreateMarketPage() {
     setResolutionHours(String(hours));
     if (anchorMilestone !== null && anchorHours !== null) {
       const raw = Math.round(anchorMilestone * (hours / anchorHours));
-      setMilestoneThreshold(String(Math.max(milestoneFloor, Math.min(milestoneMax, raw))));
+      setMilestoneThreshold(String(Math.max(milestoneFloor, raw)));
     }
   }
 
   const llmContract =
-    videoPreview?.contract && isLLMRecommendation(videoPreview.contract)
-      ? videoPreview.contract
+    suggestion?.contract && isLLMRecommendation(suggestion.contract)
+      ? suggestion.contract
       : null;
+
+  const publishDisabled =
+    isFetchingStats ||
+    isGeneratingSuggestion ||
+    isPending ||
+    !videoStats ||
+    !milestoneThreshold ||
+    !resolutionHours;
+
+  // videoAgeHours for the stats panel: use server-computed value once available,
+  // otherwise derive from publishedAt so the panel renders immediately after Phase 1
+  const videoAgeHours =
+    suggestion?.videoAgeHours ??
+    (videoStats
+      ? Math.max((Date.now() - new Date(videoStats.publishedAt).getTime()) / 3_600_000, 0.1)
+      : 0);
 
   return (
     <div className="max-w-2xl">
@@ -215,52 +298,58 @@ export default function CreateMarketPage() {
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* Video URL */}
         <div>
-          <label className="block text-sm font-medium mb-1.5">
-            YouTube Video URL
-          </label>
+          <label className="block text-sm font-medium mb-1.5">YouTube Video URL</label>
           <div className="flex gap-2">
             <input
               type="text"
               value={videoUrl}
               onChange={(e) => setVideoUrl(e.target.value)}
-              placeholder="https://youtube.com/watch?v=..."
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleFetchVideo();
+                }
+              }}
+              placeholder="https://youtube.com/shorts/..."
               className="flex-1 px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent"
             />
             <button
               type="button"
               onClick={handleFetchVideo}
-              disabled={isLoading}
+              disabled={isFetchingStats}
               className="px-4 py-2 bg-accent text-white text-sm rounded-lg hover:bg-accent-hover disabled:opacity-50 transition-colors"
             >
-              {isLoading ? "Fetching…" : "Fetch"}
+              {isFetchingStats ? "Fetching…" : "Fetch"}
             </button>
           </div>
         </div>
 
         {/* Video preview */}
-        {videoPreview && (
+        {videoStats && (
           <div className="flex gap-3 p-3 bg-card border border-border rounded-lg">
             <img
-              src={videoPreview.thumbnail}
-              alt={videoPreview.title}
+              src={videoStats.thumbnail}
+              alt={videoStats.title}
               className="w-32 h-auto rounded"
             />
-            <div className="text-sm flex-1">
-              <div className="font-medium">{videoPreview.title}</div>
-              <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-muted">{videoPreview.channelTitle}</span>
+            <div className="text-sm flex-1 min-w-0">
+              <div className="font-medium truncate">{videoStats.title}</div>
+              <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                <span className="text-muted">{videoStats.channelTitle}</span>
                 {riskTier && <RiskBadge tier={riskTier} />}
+                {liveProbability !== null && <ProbabilityBadge probability={liveProbability} />}
               </div>
-              <div className="text-muted mt-1">
-                {videoPreview.viewCount.toLocaleString()} views ·{" "}
-                {videoPreview.likeCount.toLocaleString()} likes
-              </div>
+              {isGeneratingSuggestion && (
+                <div className="mt-2 text-xs text-muted animate-pulse">
+                  Generating market suggestion…
+                </div>
+              )}
               {llmContract && (
-                <div className="mt-3 p-3 bg-muted/40 rounded-md border border-border/50 text-sm">
+                <div className="mt-3 p-3 bg-muted/40 rounded-md border border-border/50">
                   <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                     AI Analysis
                   </span>
-                  <p className="mt-1 text-muted-foreground leading-relaxed">
+                  <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
                     {llmContract.reasoning}
                   </p>
                 </div>
@@ -269,62 +358,52 @@ export default function CreateMarketPage() {
           </div>
         )}
 
-        {/* Hidden inputs so createMarket can read metadata without re-fetching */}
-        <input
-          type="hidden"
-          name="videoTitle"
-          value={videoPreview?.title ?? ""}
-        />
-        <input
-          type="hidden"
-          name="thumbnail"
-          value={videoPreview?.thumbnail ?? ""}
-        />
-        <input
-          type="hidden"
-          name="channelTitle"
-          value={videoPreview?.channelTitle ?? ""}
-        />
-        <input
-          type="hidden"
-          name="channelId"
-          value={videoPreview?.channelId ?? ""}
-        />
-        <input
-          type="hidden"
-          name="videoDescription"
-          value={videoPreview?.description ?? ""}
-        />
-        <input
-          type="hidden"
-          name="initialViewCount"
-          value={videoPreview?.viewCount ?? ""}
-        />
-        <input
-          type="hidden"
-          name="initialLikeCount"
-          value={videoPreview?.likeCount ?? ""}
-        />
+        {/* Stats panel — visible after Phase 1; skeleton cells fill in after Phase 2 */}
+        {videoStats && (
+          <MarketStatsPanel
+            viewCount={videoStats.viewCount}
+            likeCount={videoStats.likeCount}
+            videoAgeHours={videoAgeHours}
+            subscriberCount={suggestion ? suggestion.subscriberCount : null}
+            channelAvgViews={suggestion ? suggestion.channelAvgViews : null}
+          />
+        )}
 
-        {/* Market title */}
+        {/* Duplicate warning */}
+        {suggestion?.duplicateWarning && (
+          <div className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg text-sm text-yellow-600">
+            An active or draft market already exists for this video. You can still publish a new one.
+          </div>
+        )}
+
+        {/* Hidden inputs so createMarket can read metadata without re-fetching */}
+        <input type="hidden" name="videoTitle" value={videoStats?.title ?? ""} />
+        <input type="hidden" name="thumbnail" value={videoStats?.thumbnail ?? ""} />
+        <input type="hidden" name="channelTitle" value={videoStats?.channelTitle ?? ""} />
+        <input type="hidden" name="channelId" value={videoStats?.channelId ?? ""} />
+        <input type="hidden" name="videoDescription" value={videoStats?.description ?? ""} />
+        <input type="hidden" name="initialViewCount" value={videoStats?.viewCount ?? ""} />
+        <input type="hidden" name="initialLikeCount" value={videoStats?.likeCount ?? ""} />
+        <input type="hidden" name="channelAvgViews" value={suggestion?.channelAvgViews ?? ""} />
+        <input type="hidden" name="videoAgeHours" value={suggestion?.videoAgeHours ?? ""} />
+
+        {/* Market title — pre-populated from AI suggestion, editable */}
         <div>
-          <label className="block text-sm font-medium mb-1.5">
-            Market Title
-          </label>
+          <label className="block text-sm font-medium mb-1.5">Market Title</label>
           <input
             name="title"
             type="text"
             required
-            placeholder='e.g. "Will this video hit 1M views in 72 hours?"'
+            value={titleValue}
+            onChange={(e) => setTitleValue(e.target.value)}
+            placeholder='e.g. "Will this Short hit 500K views in 48h?"'
             className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent"
           />
         </div>
 
         {/* Description */}
         <div>
-          <label className="block text-sm font-medium mb-1.5">
-            Description (optional)
-          </label>
+          <label className="block text-sm font-medium mb-1.5">Description (optional)</label>
           <textarea
             name="description"
             rows={2}
@@ -336,16 +415,12 @@ export default function CreateMarketPage() {
         {/* Question type + milestone */}
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium mb-1.5">
-              Question Type
-            </label>
+            <label className="block text-sm font-medium mb-1.5">Question Type</label>
             <select
               name="questionType"
               required
               value={questionType}
-              onChange={(e) =>
-                setQuestionType(e.target.value as "views" | "likes")
-              }
+              onChange={(e) => setQuestionType(e.target.value as "views" | "likes")}
               className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent"
             >
               <option value="views">View milestone</option>
@@ -353,23 +428,15 @@ export default function CreateMarketPage() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1.5">
-              Milestone Target
-            </label>
+            <label className="block text-sm font-medium mb-1.5">Milestone Target</label>
             <input type="hidden" name="milestoneThreshold" value={milestoneThreshold} />
             <div className="space-y-2 pt-1">
               <div className="flex justify-between text-xs text-muted">
-                <span>
-                  {contractLoaded ? milestoneFloor.toLocaleString() : "–"}
-                </span>
+                <span>{contractLoaded ? milestoneFloor.toLocaleString() : "–"}</span>
                 <span className="text-sm font-semibold text-foreground">
-                  {milestoneThreshold
-                    ? Number(milestoneThreshold).toLocaleString()
-                    : "–"}
+                  {milestoneThreshold ? Number(milestoneThreshold).toLocaleString() : "–"}
                 </span>
-                <span>
-                  {contractLoaded ? milestoneMax.toLocaleString() : "–"}
-                </span>
+                <span>{contractLoaded ? milestoneMax.toLocaleString() : "–"}</span>
               </div>
               <input
                 type="range"
@@ -381,7 +448,7 @@ export default function CreateMarketPage() {
                 onChange={(e) => handleMilestoneSlider(e.target.value)}
                 className="w-full disabled:opacity-40 cursor-pointer"
               />
-              {videoPreview && contractLoaded && (
+              {videoStats && contractLoaded && (
                 <p className="text-xs text-muted">
                   Current: {formatCount(currentAnalytics)}{" "}
                   {questionType === "views" ? "views" : "likes"}
@@ -394,9 +461,7 @@ export default function CreateMarketPage() {
         {/* Resolution time + b parameter */}
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium mb-1.5">
-              Resolution Window
-            </label>
+            <label className="block text-sm font-medium mb-1.5">Resolution Window</label>
             <input type="hidden" name="resolutionHours" value={resolutionHours} />
             <div className="flex gap-2">
               {RESOLUTION_PRESETS.map((hours) => (
@@ -417,9 +482,7 @@ export default function CreateMarketPage() {
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1.5">
-              Liquidity (b)
-            </label>
+            <label className="block text-sm font-medium mb-1.5">Liquidity (b)</label>
             <input
               name="bParameter"
               type="number"
@@ -429,22 +492,9 @@ export default function CreateMarketPage() {
               onChange={(e) => setBParameter(e.target.value)}
               className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent"
             />
-            <p className="text-xs text-muted mt-1">
-              Higher = more stable prices. Max loss ≈ b × 0.69
-            </p>
+            <p className="text-xs text-muted mt-1">Higher = more stable prices. Max loss ≈ b × 0.69</p>
           </div>
         </div>
-
-        {/* Publish immediately */}
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            name="publishImmediately"
-            type="checkbox"
-            defaultChecked
-            className="rounded border-border"
-          />
-          Publish immediately (otherwise saves as draft)
-        </label>
 
         {error && (
           <div className="p-3 bg-red/10 border border-red/20 rounded-lg text-sm text-red">
@@ -454,10 +504,10 @@ export default function CreateMarketPage() {
 
         <button
           type="submit"
-          disabled={isPending || !videoPreview} // requires a loaded video; contract may be null if analytics fail
+          disabled={publishDisabled}
           className="w-full py-2.5 bg-accent hover:bg-accent-hover disabled:opacity-50 text-white font-medium rounded-lg transition-colors text-sm"
         >
-          {isPending ? "Creating..." : "Create Market"}
+          {isPending ? "Publishing…" : "Publish"}
         </button>
       </form>
     </div>

@@ -1,3 +1,8 @@
+import {
+  computeExpectedOutcome,
+  computeCalibrationProbability,
+} from "./calibration";
+
 export type RiskTier = "low" | "medium" | "high";
 
 export interface ContractRecommendation {
@@ -7,6 +12,8 @@ export interface ContractRecommendation {
   milestoneThreshold: number;
   bParameter: number;
   resolutionHours: 24 | 48 | 72;
+  /** Estimated probability of YES resolving (0–1). Used to display calibration quality to admin. */
+  estimatedProbability: number;
 }
 
 export interface LLMContractRecommendation extends ContractRecommendation {
@@ -14,6 +21,8 @@ export interface LLMContractRecommendation extends ContractRecommendation {
   reasoning: string;
   confidenceLevel: "high" | "medium" | "low";
   questionTypeRecommendation: "views" | "likes";
+  /** LLM-generated engaging market question, pre-populates the title field. */
+  suggestedTitle: string;
 }
 
 /**
@@ -98,25 +107,26 @@ export function roundToClean(value: number): number {
 }
 
 /**
- * Choose resolution window based on video characteristics, NOT milestone hit probability.
+ * Choose resolution window based on video age — prefer the shortest window with ≥4h remaining.
  * Mirrors the LLM system prompt's resolution window rule so both paths behave consistently.
  *
+ * Preference order: 24h → 48h → 72h (hard cap).
+ * A window is viable only if ≥4h remain at resolution, preventing near-expired contracts.
+ *
  * @param videoAgeHours  - Age of the video in hours at fetch time
- * @param outperformanceFactor - currentViews / channelAvgViews (1.0 = exactly average)
- * @param channelConsistency  - 0–1 coefficient; 1 = perfectly consistent channel
+ * @param _outperformanceFactor - Unused; kept for call-site compatibility
+ * @param _channelConsistency  - Unused; kept for call-site compatibility
  */
 export function resolveWindow(
   videoAgeHours: number,
-  outperformanceFactor: number,
-  channelConsistency: number
+  _outperformanceFactor: number,
+  _channelConsistency: number
 ): 24 | 48 | 72 {
-  // Already viral — window closes soon, short deadline
-  if (videoAgeHours >= 12 && outperformanceFactor >= 3.0) return 24;
-  // Strong early momentum — medium window
-  if (videoAgeHours < 36 && outperformanceFactor >= 1.5) return 48;
-  // Slow-burn or chaotic channel — cap at 72h (was 168h)
-  if (channelConsistency < 0.3 || outperformanceFactor < 0.8) return 72;
-  // Default
+  // 24h: use unless video is ≥20h old (less than 4h would remain in the window)
+  if (videoAgeHours < 20) return 24;
+  // 48h: use when video is 20–43h old
+  if (videoAgeHours < 44) return 48;
+  // 72h: hard cap — last resort for old videos
   return 72;
 }
 
@@ -124,8 +134,9 @@ export function resolveWindow(
  * Given a confidence score and video/channel analytics, return recommended
  * contract terms. All values are starting calibration — tune after deploy.
  *
- * Thresholds are set at 1.2–2.0× the logarithmic projection at the chosen
- * resolution window to produce markets where YES resolves ~35–50% of the time.
+ * Thresholds are set at 2.2–3.0× the expected outcome (max of velocity projection and
+ * channel avg at window horizon) to produce markets targeting 25–45% YES probability.
+ * The LLM path produces the same calibration target — this is the fallback.
  *
  * bParameter baseline (b=50: ~$35 moves price 50%→75%; b=200: ~$139):
  *   Low risk  (consistent channel): b=75   — tight, predictable market
@@ -169,35 +180,57 @@ export function calculateContractRecommendations(
 
   const window = resolveWindow(videoAgeHours, outperformanceFactor, channelConsistency);
 
-  // Project to the chosen window using logarithmic growth from current velocity
-  const projected = Math.round(
-    currentViews * (Math.log(window + 1) / Math.log(safeAge + 1))
+  // Expected outcome: max(velocity projection, channel avg at window horizon).
+  // This is the floor — milestone must be set above what the channel typically achieves.
+  const expectedOutcome = computeExpectedOutcome(
+    currentViews,
+    safeAge,
+    window,
+    effectiveChannelAvg
   );
 
+  function makeProbability(milestone: number): number {
+    return computeCalibrationProbability(expectedOutcome, milestone);
+  }
+
+  // Multipliers target 25–45% YES probability: P = expectedOutcome / milestone,
+  // so milestone = expectedOutcome / P. At midpoint P=0.35: milestone ≈ expectedOutcome × 2.86.
+  //   Low risk  (consistent channel): 3.0× → ~33% probability
+  //   Medium risk:                    2.5× → ~40% probability
+  //   High risk  (chaotic channel):   2.2× → ~45% probability
   switch (tier) {
-    case "low":
+    case "low": {
+      const milestoneThreshold = roundToClean(expectedOutcome * 3.0);
       return {
         predictionSource: "algorithmic",
         riskTier: tier,
-        milestoneThreshold: roundToClean(projected * 2.0),
+        milestoneThreshold,
         bParameter: 75,
         resolutionHours: window,
+        estimatedProbability: makeProbability(milestoneThreshold),
       };
-    case "medium":
+    }
+    case "medium": {
+      const milestoneThreshold = roundToClean(expectedOutcome * 2.5);
       return {
         predictionSource: "algorithmic",
         riskTier: tier,
-        milestoneThreshold: roundToClean(projected * 1.5),
+        milestoneThreshold,
         bParameter: 100,
         resolutionHours: window,
+        estimatedProbability: makeProbability(milestoneThreshold),
       };
-    case "high":
+    }
+    case "high": {
+      const milestoneThreshold = roundToClean(expectedOutcome * 2.2);
       return {
         predictionSource: "algorithmic",
         riskTier: tier,
-        milestoneThreshold: roundToClean(projected * 1.2),
+        milestoneThreshold,
         bParameter: 150,
         resolutionHours: window,
+        estimatedProbability: makeProbability(milestoneThreshold),
       };
+    }
   }
 }

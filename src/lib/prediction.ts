@@ -4,6 +4,11 @@ import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import type { LLMContractRecommendation, RiskTier } from "./contract";
 import { CONFIDENCE_TO_RISK_TIER } from "./contract";
+import {
+  projectVelocity,
+  channelAvgAtHorizon,
+  computeExpectedOutcome,
+} from "./calibration";
 
 export interface VideoContext {
   // Identity
@@ -52,7 +57,7 @@ const PREDICTION_TOOL: Anthropic.Tool = {
       milestoneThreshold: {
         type: "integer",
         description:
-          "A genuinely challenging target — set at 1.5–2× the algorithmic projection provided in the prompt for the chosen resolutionHours. Must be ABOVE the projection, never below it.",
+          "The target view/like count. Must be >= 2.2× the expected outcome (max of velocity projection and channel avg at window horizon). Set it so estimatedProbability is 0.25–0.45.",
       },
       resolutionHours: {
         type: "integer",
@@ -73,6 +78,16 @@ const PREDICTION_TOOL: Anthropic.Tool = {
         type: "string",
         enum: ["high", "medium", "low"],
       },
+      estimatedProbability: {
+        type: "number",
+        description:
+          "Your estimated probability that YES resolves (0–1). Target 0.25–0.45 for a well-calibrated market. Compute as: expected_outcome / milestoneThreshold, where expected_outcome = max(velocity_projection, channel_avg × horizon_fraction).",
+      },
+      suggestedTitle: {
+        type: "string",
+        description:
+          "An engaging market question using one of these frames: underdog ('Can this underdog Short crack {N} views in {W}h?') for small channels with high velocity; trending ('This Short is blowing up — will it hit {N} views in {W}h?') for outperformance > 3×; time-pressure ('Just {W}h to decide — will this Short crack {N} views?') for 24h windows; or default ('Will this Short hit {N} views in {W}h?'). Use actual numbers, not placeholders.",
+      },
       reasoning: {
         type: "string",
         description:
@@ -85,36 +100,52 @@ const PREDICTION_TOOL: Anthropic.Tool = {
       "bParameter",
       "questionTypeRecommendation",
       "confidenceLevel",
+      "estimatedProbability",
+      "suggestedTitle",
       "reasoning",
     ],
   },
 };
 
-// Prompt engineering for projection-anchored calibration.
-// Target ~1.5–2× the algorithmic projection so YES resolves ~35–50% of the time.
+// Prompt engineering for probability-anchored calibration.
+// PRIMARY GOAL: estimatedProbability must be 0.25–0.45. Milestone >= 2.2× expected outcome.
 const SYSTEM_PROMPT = `You are a calibrated viewership forecaster for a prediction market platform.
 
-GOAL: Set milestoneThreshold at a genuinely challenging level — roughly 1.5–2× the algorithmic projection provided in the prompt for the chosen resolution window. This produces markets where YES has a real chance of NOT resolving (target: 35–50% YES rate). Do NOT set the threshold below the algorithmic projection — that produces trivially easy markets.
+PRIMARY CALIBRATION RULE: Set milestoneThreshold so that estimatedProbability is between 0.25 and 0.45.
+- Compute expected outcome: max(velocity_projection_at_chosen_window, channel_avg × horizon_fraction)
+  where horizon_fraction = 0.55 for 24h, 0.80 for 48h, 1.00 for 72h
+- Compute: estimatedProbability = expected_outcome / milestoneThreshold
+- milestoneThreshold must always be >= 2.2× the expected outcome
+- Do NOT set milestone below channel_avg × horizon_fraction — that is the baseline floor
+- Target 0.30–0.40 for the most compelling markets (genuine risk of failure)
+- A market where YES probability is 0.60+ is too easy — do not produce these
+- Use the "Expected outcome floor" lines in the prompt as your floor — never go below them
 
 CALIBRATION APPROACH:
-1. Read the "Algorithmic projection" lines in the prompt — these are your primary anchor.
-2. For high-confidence/consistent channels (outperformance factor ≥ 1.5, consistency high): use 1.8–2.0× the projection.
-3. For low-confidence/chaotic channels (outperformance factor < 1.0, consistency low): use 1.2–1.5× the projection.
-4. Cap the multiplier at 3× to avoid absurd thresholds for mega-channels.
+1. Read the "Expected outcome floor" lines in the prompt — these are your hard minimums.
+2. For high-confidence/consistent channels (outperformance ≥ 1.5, consistency high): use 2.8–3.2× the expected outcome.
+3. For low-confidence/chaotic channels (outperformance < 1.0, consistency low): use 2.2–2.6× the expected outcome.
 
 LMSR MARKET CONTEXT:
 - bParameter controls price sensitivity. b=75: ~$52 moves price 50%→75%. b=150: ~$104.
 - High confidence (consistent channel, established velocity) → lower b (75).
 - Low confidence (chaotic channel, very new video) → higher b (150).
 
-RESOLUTION WINDOW (choose based on video characteristics, NOT milestone hit probability):
-- 24h: video is ≥12h old AND outperformance factor ≥ 3.0 (already viral — window closes soon)
-- 48h: video is <36h old AND outperformance factor ≥ 1.5 (strong early momentum)
-- 72h: default for all other cases including slow-burn or chaotic channels (hard maximum — never exceed 72h)
+RESOLUTION WINDOW (choose based on video age — prefer shortest viable window):
+- 24h: video is < 20h old (≥4h remains in window) — use for most fresh videos
+- 48h: video is 20–43h old
+- 72h: video is ≥44h old (hard maximum — never exceed 72h)
 
 QUESTION TYPE:
 - "likes" when likeRatio > 3% AND content is music/meme/community-driven
-- "views" for most content`;
+- "views" for most content
+
+MARKET TITLE (suggestedTitle): Write an engaging question using one of these frames:
+- Underdog (channel subs < 100K AND outperformance > 1.5×): "Can this underdog Short crack {N} views in {W}h?"
+- Trending (outperformance > 3.0×): "This Short is blowing up — will it hit {N} views in {W}h?"
+- Time-pressure (24h window): "Just 24h to decide — will this Short crack {N} views?"
+- Default: "Will this Short hit {N} views in {W}h?"
+Use actual numbers (e.g. "500,000 views"), not variable names. Adjust "views" to "likes" when questionTypeRecommendation is "likes".`;
 
 const ResponseSchema = z.object({
   // Pre-round floats before int check — Claude sometimes returns 524288.7
@@ -129,6 +160,8 @@ const ResponseSchema = z.object({
     .transform((v) => Math.round(Math.max(50, Math.min(200, v)))),
   questionTypeRecommendation: z.enum(["views", "likes"]),
   confidenceLevel: z.enum(["high", "medium", "low"]),
+  estimatedProbability: z.number().min(0).max(1),
+  suggestedTitle: z.string().min(1).max(250),
   reasoning: z.string().min(1).max(600),
 });
 
@@ -144,17 +177,7 @@ function sanitizeForPrompt(s: string, maxLen: number): string {
     .trim();
 }
 
-/** Logarithmic growth projection from current velocity to a future hour. */
-function projectViews(
-  currentViews: number,
-  videoAgeHours: number,
-  targetHours: number
-): number {
-  const safeAge = Math.max(videoAgeHours, 0.1);
-  return Math.round(
-    currentViews * (Math.log(targetHours + 1) / Math.log(safeAge + 1))
-  );
-}
+// projectVelocity is imported from calibration.ts — no local duplicate needed.
 
 function buildUserPrompt(ctx: VideoContext): string {
   // Sanitize user-origin strings — strips structural chars before LLM embedding (prompt injection)
@@ -184,9 +207,20 @@ function buildUserPrompt(ctx: VideoContext): string {
       : 1.0;
 
   // Projections at each candidate window — give the LLM concrete anchors for threshold setting
-  const proj24 = projectViews(ctx.currentViews, ctx.videoAgeHours, 24);
-  const proj48 = projectViews(ctx.currentViews, ctx.videoAgeHours, 48);
-  const proj72 = projectViews(ctx.currentViews, ctx.videoAgeHours, 72);
+  const proj24 = projectVelocity(ctx.currentViews, ctx.videoAgeHours, 24);
+  const proj48 = projectVelocity(ctx.currentViews, ctx.videoAgeHours, 48);
+  const proj72 = projectVelocity(ctx.currentViews, ctx.videoAgeHours, 72);
+
+  // Expected outcome floor: max(velocity, channel avg × horizon fraction)
+  // The LLM must set milestone above these values.
+  const floor24 = computeExpectedOutcome(ctx.currentViews, ctx.videoAgeHours, 24, ctx.channelAvgViews);
+  const floor48 = computeExpectedOutcome(ctx.currentViews, ctx.videoAgeHours, 48, ctx.channelAvgViews);
+  const floor72 = computeExpectedOutcome(ctx.currentViews, ctx.videoAgeHours, 72, ctx.channelAvgViews);
+
+  // Channel avg scaled to each window horizon (displayed for transparency)
+  const chAvg24 = channelAvgAtHorizon(ctx.channelAvgViews, 24);
+  const chAvg48 = channelAvgAtHorizon(ctx.channelAvgViews, 48);
+  const chAvg72 = channelAvgAtHorizon(ctx.channelAvgViews, 72);
 
   // Labeled text format — more readable for the LLM than raw JSON
   return [
@@ -204,10 +238,20 @@ function buildUserPrompt(ctx: VideoContext): string {
     `Channel consistency score: ${channelConsistencyPct}% (100% = perfectly consistent, 0% = chaotic)`,
     `Outperformance factor: ${outperformanceFactor}x channel average`,
     ``,
-    `Algorithmic projection (logarithmic growth from current velocity):`,
+    `Velocity projection (logarithmic growth from current velocity only):`,
     `  - At 24h: ${proj24.toLocaleString()} views`,
     `  - At 48h: ${proj48.toLocaleString()} views`,
     `  - At 72h: ${proj72.toLocaleString()} views`,
+    ``,
+    `Channel baseline floor at each window (channel avg × horizon fraction 0.55/0.80/1.00):`,
+    `  - At 24h: ${chAvg24.toLocaleString()} views`,
+    `  - At 48h: ${chAvg48.toLocaleString()} views`,
+    `  - At 72h: ${chAvg72.toLocaleString()} views`,
+    ``,
+    `Expected outcome floor (max of velocity and channel baseline — milestone must exceed this):`,
+    `  - At 24h: ${floor24.toLocaleString()} views  ← milestone must be >= 2.2× this = ${(floor24 * 2.2).toLocaleString()}`,
+    `  - At 48h: ${floor48.toLocaleString()} views  ← milestone must be >= 2.2× this = ${(floor48 * 2.2).toLocaleString()}`,
+    `  - At 72h: ${floor72.toLocaleString()} views  ← milestone must be >= 2.2× this = ${(floor72 * 2.2).toLocaleString()}`,
   ]
     .filter((line): line is string => line !== null)
     .join("\n");
@@ -270,10 +314,12 @@ export async function generateContractPrediction(
       milestoneThreshold: parsed.milestoneThreshold,
       bParameter: parsed.bParameter,
       resolutionHours: parsed.resolutionHours,
+      estimatedProbability: parsed.estimatedProbability,
       predictionSource: "llm",
       reasoning: parsed.reasoning,
       confidenceLevel: parsed.confidenceLevel,
       questionTypeRecommendation: parsed.questionTypeRecommendation,
+      suggestedTitle: parsed.suggestedTitle,
     } satisfies LLMContractRecommendation;
   } catch (err) {
     // Classify errors for appropriate log verbosity

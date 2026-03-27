@@ -2,11 +2,12 @@
 
 import { db } from "@/db";
 import { markets, priceSnapshots, youtubePolls } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { isAdmin } from "@/lib/admin";
 import { allPrices } from "@/lib/lmsr";
 import { computeMilestoneFloor } from "@/lib/market-utils";
+import { computeExpectedOutcome } from "@/lib/calibration";
 import { revalidatePath } from "next/cache";
 import { distributePayout, refundPositions } from "@/lib/services/payout";
 import {
@@ -82,9 +83,38 @@ function extractVideoId(url: string): string | null {
   return null;
 }
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Generate a template market title for the algorithmic fallback path. */
+function generateTemplateTitle(
+  milestone: number,
+  metric: "views" | "likes",
+  windowHours: number,
+  outperformanceFactor: number,
+  subscriberCount: number
+): string {
+  const n = milestone.toLocaleString();
+  const m = metric;
+  if (subscriberCount < 100_000 && outperformanceFactor > 1.5) {
+    return `Can this underdog Short crack ${n} ${m} in ${windowHours}h?`;
+  }
+  if (outperformanceFactor > 3.0) {
+    return `This Short is blowing up — will it hit ${n} ${m} in ${windowHours}h?`;
+  }
+  if (windowHours <= 24) {
+    return `Just 24h to decide — will this Short crack ${n} ${m}?`;
+  }
+  return `Will this Short hit ${n} ${m} in ${windowHours}h?`;
+}
+
 // ─── Actions ─────────────────────────────────────────────────────────────────
 
-export async function fetchVideoMetadata(url: string) {
+/**
+ * Phase 1 of two-phase fetch — fast video stats only (~500ms).
+ * Returns video metadata without channel analytics or market suggestion.
+ * Call generateMarketSuggestion next for the contract recommendation.
+ */
+export async function fetchVideoStats(url: string) {
   const session = await auth();
   if (!isAdmin(session)) return { error: "Unauthorized" };
 
@@ -99,7 +129,10 @@ export async function fetchVideoMetadata(url: string) {
     { cache: "no-store", signal: AbortSignal.timeout(YT_TIMEOUT_MS) }
   );
 
-  if (!videoRes.ok) return { error: "YouTube API error" };
+  if (!videoRes.ok) {
+    const isQuotaError = videoRes.status === 403;
+    return { error: isQuotaError ? "YouTube API quota exceeded — try again later" : "YouTube API error" };
+  }
 
   const videoData: YTListResponse<YTVideoItem> = await videoRes.json();
   if (!videoData.items || videoData.items.length === 0) {
@@ -107,26 +140,68 @@ export async function fetchVideoMetadata(url: string) {
   }
 
   const item = videoData.items[0];
-  const viewCount = parseInt(item.statistics.viewCount || "0");
-  const likeCount = parseInt(item.statistics.likeCount || "0");
-  // Resolve thumbnail before the try block — used in the final return regardless of analytics success.
   const thumbnails = item.snippet.thumbnails;
-  const thumbnail = thumbnails?.medium?.url ?? thumbnails?.default?.url ?? "";
 
-  // Fetch channel analytics in parallel for risk-tier contract recommendations.
-  // If any call fails, fall back gracefully (contract = null).
-  let contract: ContractRecommendation | LLMContractRecommendation | null =
-    null;
+  return {
+    videoId,
+    title: item.snippet.title,
+    thumbnail: thumbnails?.medium?.url ?? thumbnails?.default?.url ?? "",
+    channelTitle: item.snippet.channelTitle,
+    channelId: item.snippet.channelId,
+    description: item.snippet.description ?? "",
+    viewCount: parseInt(item.statistics.viewCount || "0"),
+    likeCount: parseInt(item.statistics.likeCount || "0"),
+    publishedAt: item.snippet.publishedAt,
+    categoryId: item.snippet.categoryId,
+  };
+}
+
+/**
+ * Phase 2 of two-phase fetch — channel analytics + market suggestion (~5–15s with LLM).
+ * Fetches channel baseline, computes velocity, runs LLM (with algorithmic fallback).
+ * Returns the contract recommendation plus stats for the admin stats panel.
+ */
+export async function generateMarketSuggestion(input: {
+  videoId: string;
+  title: string;
+  channelId: string;
+  channelTitle: string;
+  publishedAt: string;
+  categoryId?: string;
+  viewCount: number;
+  likeCount: number;
+}) {
+  const session = await auth();
+  if (!isAdmin(session)) return { error: "Unauthorized" };
+
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  if (!apiKey) return { error: "YouTube API key not configured" };
+
+  const { videoId, title, channelId, channelTitle, publishedAt, categoryId, viewCount, likeCount } = input;
+
+  const videoAgeHours = Math.max(
+    (Date.now() - new Date(publishedAt).getTime()) / 3_600_000,
+    0.1
+  );
+
+  // Warn admin if an active or draft market already exists for this video
+  const existing = await db
+    .select({ id: markets.id })
+    .from(markets)
+    .where(
+      and(
+        eq(markets.youtubeVideoId, videoId),
+        or(eq(markets.status, "active"), eq(markets.status, "draft"))
+      )
+    )
+    .limit(1);
+  const duplicateWarning = existing.length > 0;
+
+  let contract: ContractRecommendation | LLMContractRecommendation | null = null;
+  let subscriberCount = 0;
+  let channelAvgViews = viewCount; // fallback if channel fetch fails
+
   try {
-    const channelId: string = item.snippet.channelId;
-    const publishedAt: string = item.snippet.publishedAt;
-    const categoryId: string | undefined = item.snippet.categoryId;
-    const videoAgeHours = Math.max(
-      (Date.now() - new Date(publishedAt).getTime()) / 3_600_000,
-      0.1
-    );
-
-    // Fetch subscriber count and uploads playlist ID in one call (saves a request vs two parallel).
     const channelRes = await fetch(
       `${YOUTUBE_API_BASE}/channels?part=statistics,contentDetails&id=${channelId}&key=${apiKey}&fields=items(statistics/subscriberCount,contentDetails/relatedPlaylists/uploads)`,
       { cache: "no-store", signal: AbortSignal.timeout(YT_TIMEOUT_MS) }
@@ -134,13 +209,9 @@ export async function fetchVideoMetadata(url: string) {
     const channelData: YTListResponse<YTChannelItem> | null = channelRes.ok
       ? await channelRes.json()
       : null;
-    const subscriberCount = Number(
-      channelData?.items?.[0]?.statistics?.subscriberCount ?? 0
-    );
-    const uploadsPlaylistId =
-      channelData?.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
+    subscriberCount = Number(channelData?.items?.[0]?.statistics?.subscriberCount ?? 0);
+    const uploadsPlaylistId = channelData?.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
 
-    // Use playlistItems.list (1 quota unit) instead of search.list (100 quota units).
     let recentViewCounts: number[] = [];
     if (uploadsPlaylistId) {
       const playlistRes = await fetch(
@@ -148,8 +219,7 @@ export async function fetchVideoMetadata(url: string) {
         { cache: "no-store", signal: AbortSignal.timeout(YT_TIMEOUT_MS) }
       );
       if (playlistRes.ok) {
-        const playlistData: YTListResponse<YTPlaylistItem> =
-          await playlistRes.json();
+        const playlistData: YTListResponse<YTPlaylistItem> = await playlistRes.json();
         const recentVideoIds = (playlistData.items ?? [])
           .map((v) => v.contentDetails.videoId)
           .filter(Boolean);
@@ -160,8 +230,7 @@ export async function fetchVideoMetadata(url: string) {
             { cache: "no-store", signal: AbortSignal.timeout(YT_TIMEOUT_MS) }
           );
           if (statsRes.ok) {
-            const statsData: YTListResponse<YTStatsItem> =
-              await statsRes.json();
+            const statsData: YTListResponse<YTStatsItem> = await statsRes.json();
             recentViewCounts = (statsData.items ?? []).map((v) =>
               parseInt(v.statistics.viewCount || "0")
             );
@@ -182,7 +251,8 @@ export async function fetchVideoMetadata(url: string) {
           )
         : 0;
 
-    // Pass precomputed mean/stdDev to skip re-iteration inside calculateConfidence.
+    channelAvgViews = mean;
+
     const confidence = calculateConfidence(
       videoAgeHours,
       recentViewCounts,
@@ -190,12 +260,12 @@ export async function fetchVideoMetadata(url: string) {
       recentViewCounts.length > 1 ? stdDev : undefined
     );
 
-    // Try LLM, fall back to algorithmic. generateContractPrediction logs before rethrowing.
+    let suggestedTitle: string | null = null;
+
     try {
-      // VideoContext constructed inside inner try — only needed for the LLM path.
       const videoContext: VideoContext = {
-        videoTitle: item.snippet.title,
-        channelName: item.snippet.channelTitle,
+        videoTitle: title,
+        channelName: channelTitle,
         videoCategory: categoryId,
         videoAgeHours,
         publishedDayOfWeek: new Date(publishedAt).getUTCDay(),
@@ -206,9 +276,11 @@ export async function fetchVideoMetadata(url: string) {
         channelAvgViews: mean,
         channelStdDev: stdDev,
       };
-      contract = await generateContractPrediction(videoContext);
+      const llmContract = await generateContractPrediction(videoContext);
+      contract = llmContract;
+      suggestedTitle = llmContract.suggestedTitle;
     } catch {
-      // Silent to the user — generateContractPrediction already logged the error type
+      // LLM failed — algorithmic fallback. generateContractPrediction already logged.
       contract = calculateContractRecommendations(
         confidence,
         viewCount,
@@ -216,26 +288,35 @@ export async function fetchVideoMetadata(url: string) {
         recentViewCounts,
         mean
       );
+      const outperformanceFactor = mean > 0 ? viewCount / mean : 1.0;
+      suggestedTitle = generateTemplateTitle(
+        contract.milestoneThreshold,
+        "views",
+        contract.resolutionHours,
+        outperformanceFactor,
+        subscriberCount
+      );
     }
+
+    return {
+      contract,
+      suggestedTitle,
+      videoAgeHours,
+      subscriberCount,
+      channelAvgViews,
+      duplicateWarning,
+    };
   } catch {
-    // Analytics fetch failed — contract stays null; UI uses static form defaults.
+    // Channel fetch failed — return null contract so UI can still render stats panel
+    return {
+      contract: null,
+      suggestedTitle: null,
+      videoAgeHours,
+      subscriberCount,
+      channelAvgViews,
+      duplicateWarning,
+    };
   }
-
-  if (!item.snippet.description) {
-    console.warn("[fetchVideoMetadata] description missing from YouTube response — check fields projection");
-  }
-
-  return {
-    videoId,
-    title: item.snippet.title,
-    thumbnail,
-    channelTitle: item.snippet.channelTitle,
-    channelId: item.snippet.channelId,
-    description: item.snippet.description ?? "",
-    viewCount,
-    likeCount,
-    contract,
-  };
 }
 
 export async function createMarket(formData: FormData) {
@@ -283,7 +364,7 @@ export async function createMarket(formData: FormData) {
     return { error: "Invalid milestoneThreshold" };
   }
 
-  // 20% floor guard — milestone must require future growth above the video's current analytics.
+  // Floor guard — milestone must exceed what the channel typically achieves in the window.
   // These fields are required; omitting them is a hard error (not a silent bypass).
   // Number() correctly parses scientific notation ("1e6" → 1000000); parseInt would truncate to 1.
   const initialViewCount = Math.round(Number((formData.get("initialViewCount") ?? "") as string));
@@ -293,13 +374,29 @@ export async function createMarket(formData: FormData) {
     return { error: "initialViewCount and initialLikeCount are required" };
   }
   const initialCount = validatedQuestionType === "views" ? initialViewCount : initialLikeCount;
-  // Note: the server enforces only the analytics component (ceil(current × 1.2)). The anchor
-  // component (0.1× anchor) is a UX constraint enforced by the slider and is not re-validated
-  // server-side because the anchor is a client-supplied value.
-  const requiredFloor = Math.ceil(initialCount * 1.2);
+
+  // channelAvgViews and videoAgeHours are provided by the client (fetched during suggestion phase).
+  // Falls back to 0/1 if missing, which degrades to velocity-only projection.
+  const channelAvgViews = Math.max(
+    0,
+    Math.round(Number((formData.get("channelAvgViews") ?? "0") as string))
+  );
+  const videoAgeHoursRaw = Math.max(
+    0.1,
+    Number((formData.get("videoAgeHours") ?? "1") as string)
+  );
+  const videoAgeHoursVal = isFinite(videoAgeHoursRaw) ? videoAgeHoursRaw : 1;
+
+  const resolutionHoursNum = parseInt(resolutionHours || "72");
+  const requiredFloor = computeExpectedOutcome(
+    initialCount,
+    videoAgeHoursVal,
+    resolutionHoursNum,
+    channelAvgViews
+  );
   if (Number(milestoneThresholdRaw) < requiredFloor) {
     return {
-      error: `Milestone must be at least 20% above the current ${validatedQuestionType} count (minimum: ${requiredFloor.toLocaleString()})`,
+      error: `Milestone must exceed the expected ${validatedQuestionType} count at resolution (minimum: ${requiredFloor.toLocaleString()})`,
     };
   }
 
