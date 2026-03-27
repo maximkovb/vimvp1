@@ -12,6 +12,21 @@
  */
 
 /**
+ * Fraction of total view accumulation expected by each resolution window horizon.
+ *
+ * Approximation: YouTube Shorts typically accumulate ~55% of total views in the first 24h,
+ * ~80% by 48h, and reach ~100% by 72h. Adjust these ratios empirically after deploy.
+ *
+ * These are exported so the LLM system prompt (prediction.ts) stays in sync with the
+ * algorithmic path. Change here → both paths update automatically.
+ */
+export const HORIZON_FRACTION: Record<24 | 48 | 72, number> = {
+  24: 0.55,
+  48: 0.80,
+  72: 1.00,
+};
+
+/**
  * Logarithmic velocity projection — what this video is tracking toward based on
  * its current velocity. Same formula across all code paths.
  */
@@ -28,17 +43,13 @@ export function projectVelocity(
 
 /**
  * Channel average scaled to a given window horizon.
- *
- * Approximation: YouTube Shorts typically accumulate ~55% of total views in the first 24h,
- * ~80% by 48h, and reach ~100% by 72h. Adjust these ratios empirically after deploy.
+ * Uses HORIZON_FRACTION — see that constant for the accumulation ratios and tuning notes.
  */
 export function channelAvgAtHorizon(
   channelAvgViews: number,
-  windowHours: number
+  windowHours: 24 | 48 | 72
 ): number {
-  if (windowHours <= 24) return Math.round(channelAvgViews * 0.55);
-  if (windowHours <= 48) return Math.round(channelAvgViews * 0.8);
-  return Math.round(channelAvgViews); // 72h → 100%
+  return Math.round(channelAvgViews * HORIZON_FRACTION[windowHours]);
 }
 
 /**
@@ -55,14 +66,24 @@ export function computeExpectedOutcome(
   channelAvgViews: number
 ): number {
   const velocity = projectVelocity(currentViews, videoAgeHours, windowHours);
-  const channelFloor = channelAvgAtHorizon(channelAvgViews, windowHours);
+  // channelAvgAtHorizon only handles preset values; for non-preset windows, use linear scaling
+  const fraction =
+    windowHours <= 24
+      ? HORIZON_FRACTION[24]
+      : windowHours <= 48
+        ? HORIZON_FRACTION[48]
+        : HORIZON_FRACTION[72];
+  const channelFloor = Math.round(channelAvgViews * fraction);
   return Math.max(velocity, channelFloor);
 }
 
 /**
  * Probability the milestone will be hit, given expected outcome.
  * expectedOutcome / milestone, clamped to [0, 1].
- * Returns 0.5 as a neutral fallback when inputs are degenerate.
+ *
+ * Returns 0.5 as a neutral sentinel when inputs are degenerate (missing/zero data).
+ * IMPORTANT: callers must treat 0.5 returned for zero inputs as "data unavailable",
+ * NOT as a calibrated probability estimate.
  */
 export function computeCalibrationProbability(
   expectedOutcome: number,

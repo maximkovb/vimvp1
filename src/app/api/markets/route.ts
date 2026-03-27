@@ -5,6 +5,7 @@ import { desc, eq, or } from "drizzle-orm";
 import { getMarketPrices } from "@/lib/market-utils";
 import { allPrices } from "@/lib/lmsr";
 import { verifyCronAuth } from "@/lib/cron-auth";
+import { computeExpectedOutcome } from "@/lib/calibration";
 import { z } from "zod";
 
 const CreateMarketSchema = z.object({
@@ -14,17 +15,19 @@ const CreateMarketSchema = z.object({
   questionType: z.enum(["views", "likes"]),
   milestoneThreshold: z.number().int().min(1).max(10_000_000_000),
   bParameter: z.number().min(1).max(1000),
-  resolutionHours: z.union([
-    z.literal(24),
-    z.literal(48),
-    z.literal(72),
-    z.literal(168),
-  ]),
+  resolutionHours: z.union([z.literal(24), z.literal(48), z.literal(72)]),
   publishImmediately: z.boolean().default(false),
+  // Optional calibration fields — used to enforce the channel-baseline floor guard.
+  // Omitting them degrades to velocity-only floor (same as when channel data is unavailable).
+  initialViewCount: z.number().int().min(0).optional(),
+  channelAvgViews: z.number().int().min(0).optional(),
+  videoAgeHours: z.number().min(0.1).optional(),
   videoMetadata: z.object({
     title: z.string(),
     thumbnail: z.string().default(""),
     channelTitle: z.string(),
+    channelId: z.string().optional(),
+    description: z.string().max(5000).optional(),
   }),
 });
 
@@ -49,6 +52,26 @@ export async function POST(request: Request) {
   }
 
   const data = parsed.data;
+
+  // Floor guard — mirrors createMarket() in admin.ts.
+  // Callers that supply initialViewCount/channelAvgViews/videoAgeHours get full calibration;
+  // omitting them degrades to velocity-only floor (channelAvgViews=0, age=1h).
+  const floorBase = data.initialViewCount ?? 0;
+  const floorChannelAvg = data.channelAvgViews ?? 0;
+  const floorAge = data.videoAgeHours ?? 1;
+  const requiredFloor = computeExpectedOutcome(
+    floorBase,
+    floorAge,
+    data.resolutionHours,
+    floorChannelAvg
+  );
+  if (data.milestoneThreshold < requiredFloor) {
+    return NextResponse.json(
+      { error: `Milestone below expected outcome floor (minimum: ${requiredFloor.toLocaleString()})` },
+      { status: 422 }
+    );
+  }
+
   const now = new Date();
   const resolvesAt = new Date(
     now.getTime() + data.resolutionHours * 60 * 60 * 1000

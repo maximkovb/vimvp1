@@ -114,14 +114,8 @@ export function roundToClean(value: number): number {
  * A window is viable only if ≥4h remain at resolution, preventing near-expired contracts.
  *
  * @param videoAgeHours  - Age of the video in hours at fetch time
- * @param _outperformanceFactor - Unused; kept for call-site compatibility
- * @param _channelConsistency  - Unused; kept for call-site compatibility
  */
-export function resolveWindow(
-  videoAgeHours: number,
-  _outperformanceFactor: number,
-  _channelConsistency: number
-): 24 | 48 | 72 {
+export function resolveWindow(videoAgeHours: number): 24 | 48 | 72 {
   // 24h: use unless video is ≥20h old (less than 4h would remain in the window)
   if (videoAgeHours < 20) return 24;
   // 48h: use when video is 20–43h old
@@ -165,20 +159,7 @@ export function calculateContractRecommendations(
       : currentViews;
   const effectiveChannelAvg = channelAvgViews ?? avgViews;
 
-  // outperformanceFactor: how this video compares to the channel baseline
-  const outperformanceFactor =
-    effectiveChannelAvg > 0 ? currentViews / effectiveChannelAvg : 1.0;
-
-  // Channel consistency: 1 = perfectly consistent, 0 = chaotic
-  let channelConsistency = 0.5; // default when insufficient data
-  if (recentViewCounts.length > 1 && avgViews > 0) {
-    const variance =
-      recentViewCounts.reduce((acc, v) => acc + (v - avgViews) ** 2, 0) /
-      recentViewCounts.length;
-    channelConsistency = Math.max(0, 1 - Math.sqrt(variance) / avgViews);
-  }
-
-  const window = resolveWindow(videoAgeHours, outperformanceFactor, channelConsistency);
+  const window = resolveWindow(videoAgeHours);
 
   // Expected outcome: max(velocity projection, channel avg at window horizon).
   // This is the floor — milestone must be set above what the channel typically achieves.

@@ -109,6 +109,18 @@ function generateTemplateTitle(
 
 // ─── Actions ─────────────────────────────────────────────────────────────────
 
+// ─── Exported success types ───────────────────────────────────────────────────
+// Derived at the type level so client components (page.tsx) don't duplicate shapes manually.
+
+export type VideoStatsSuccess = Exclude<
+  Awaited<ReturnType<typeof fetchVideoStats>>,
+  { error: string }
+>;
+export type SuggestionSuccess = Exclude<
+  Awaited<ReturnType<typeof generateMarketSuggestion>>,
+  { error: string }
+>;
+
 /**
  * Phase 1 of two-phase fetch — fast video stats only (~500ms).
  * Returns video metadata without channel analytics or market suggestion.
@@ -331,6 +343,8 @@ export async function createMarket(formData: FormData) {
     "") as string;
   const bParameterRaw = (formData.get("bParameter") ?? "") as string;
   const resolutionHours = (formData.get("resolutionHours") ?? "") as string;
+  // The admin UI always sets publishImmediately=true (checkbox removed).
+  // This field is preserved so the POST /api/markets agent route can still create drafts.
   const publishImmediately = formData.get("publishImmediately") === "true";
 
   if (!videoUrl || !title || !questionType || !milestoneThresholdRaw) {
@@ -375,17 +389,21 @@ export async function createMarket(formData: FormData) {
   }
   const initialCount = validatedQuestionType === "views" ? initialViewCount : initialLikeCount;
 
-  // channelAvgViews and videoAgeHours are provided by the client (fetched during suggestion phase).
-  // Falls back to 0/1 if missing, which degrades to velocity-only projection.
+  // channelAvgViews is client-supplied (from Phase 2 suggestion) — clamped but trusted.
+  // Falls back to 0, which degrades to velocity-only projection.
   const channelAvgViews = Math.max(
     0,
     Math.round(Number((formData.get("channelAvgViews") ?? "0") as string))
   );
-  const videoAgeHoursRaw = Math.max(
-    0.1,
-    Number((formData.get("videoAgeHours") ?? "1") as string)
-  );
-  const videoAgeHoursVal = isFinite(videoAgeHoursRaw) ? videoAgeHoursRaw : 1;
+
+  // videoAgeHours is re-derived server-side from publishedAt to prevent client manipulation
+  // and to use the age at submit time rather than suggestion time.
+  // Falls back to 1h if publishedAt is absent or unparseable.
+  const publishedAtStr = (formData.get("publishedAt") ?? "") as string;
+  const videoAgeHoursVal =
+    publishedAtStr && !isNaN(Date.parse(publishedAtStr))
+      ? Math.max((Date.now() - new Date(publishedAtStr).getTime()) / 3_600_000, 0.1)
+      : 1;
 
   const resolutionHoursNum = parseInt(resolutionHours || "72");
   const requiredFloor = computeExpectedOutcome(

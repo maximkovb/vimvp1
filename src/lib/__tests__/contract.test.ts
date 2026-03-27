@@ -109,27 +109,26 @@ describe("roundToClean()", () => {
 
 describe("resolveWindow()", () => {
   it("returns 24h for a fresh video (< 20h old)", () => {
-    expect(resolveWindow(0, 1.0, 0.8)).toBe(24);
-    expect(resolveWindow(10, 1.0, 0.8)).toBe(24);
-    expect(resolveWindow(19.9, 1.0, 0.8)).toBe(24);
+    expect(resolveWindow(0)).toBe(24);
+    expect(resolveWindow(10)).toBe(24);
+    expect(resolveWindow(19.9)).toBe(24);
   });
 
   it("returns 48h when video is 20–43h old", () => {
-    expect(resolveWindow(20, 1.0, 0.8)).toBe(48);
-    expect(resolveWindow(30, 0.5, 0.3)).toBe(48);
-    expect(resolveWindow(43.9, 1.2, 0.7)).toBe(48);
+    expect(resolveWindow(20)).toBe(48);
+    expect(resolveWindow(30)).toBe(48);
+    expect(resolveWindow(43.9)).toBe(48);
   });
 
   it("returns 72h when video is 44h or older", () => {
-    expect(resolveWindow(44, 1.0, 0.8)).toBe(72);
-    expect(resolveWindow(48, 1.0, 0.29)).toBe(72); // was 168h — now 72h (hard cap)
-    expect(resolveWindow(48, 0.79, 0.6)).toBe(72); // was 168h — now 72h (hard cap)
-    expect(resolveWindow(100, 1.0, 0.5)).toBe(72);
+    expect(resolveWindow(44)).toBe(72);
+    expect(resolveWindow(48)).toBe(72);
+    expect(resolveWindow(100)).toBe(72);
   });
 
-  it("returns 72h as the default for old videos regardless of performance", () => {
-    expect(resolveWindow(48, 1.2, 0.7)).toBe(72);
-    expect(resolveWindow(50, 5.0, 0.99)).toBe(72); // viral but old → 72h
+  it("returns 72h as the default for old videos", () => {
+    expect(resolveWindow(48)).toBe(72);
+    expect(resolveWindow(50)).toBe(72);
   });
 
   it("resolutionHours is always a valid value (24, 48, or 72)", () => {

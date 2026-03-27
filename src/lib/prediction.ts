@@ -8,6 +8,7 @@ import {
   projectVelocity,
   channelAvgAtHorizon,
   computeExpectedOutcome,
+  HORIZON_FRACTION,
 } from "./calibration";
 
 export interface VideoContext {
@@ -113,7 +114,7 @@ const SYSTEM_PROMPT = `You are a calibrated viewership forecaster for a predicti
 
 PRIMARY CALIBRATION RULE: Set milestoneThreshold so that estimatedProbability is between 0.25 and 0.45.
 - Compute expected outcome: max(velocity_projection_at_chosen_window, channel_avg × horizon_fraction)
-  where horizon_fraction = 0.55 for 24h, 0.80 for 48h, 1.00 for 72h
+  where horizon_fraction = ${HORIZON_FRACTION[24]} for 24h, ${HORIZON_FRACTION[48]} for 48h, ${HORIZON_FRACTION[72]} for 72h
 - Compute: estimatedProbability = expected_outcome / milestoneThreshold
 - milestoneThreshold must always be >= 2.2× the expected outcome
 - Do NOT set milestone below channel_avg × horizon_fraction — that is the baseline floor

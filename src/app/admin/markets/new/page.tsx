@@ -3,10 +3,11 @@
 import { useState, useRef, useTransition, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { fetchVideoStats, generateMarketSuggestion, createMarket } from "@/lib/actions/admin";
+import type { VideoStatsSuccess, SuggestionSuccess } from "@/lib/actions/admin";
 import type { RiskTier, ContractRecommendation, LLMContractRecommendation } from "@/lib/contract";
 import { isLLMRecommendation } from "@/lib/contract";
 
-import { snapToPreset, computeStep, computeMilestoneFloor, computeProbability } from "./helpers";
+import { computeStep, computeMilestoneFloor, computeProbability } from "./helpers";
 import { formatCount } from "@/lib/format";
 import { MarketStatsPanel } from "@/components/admin/MarketStatsPanel";
 
@@ -38,7 +39,7 @@ function RiskBadge({ tier }: { tier: RiskTier }) {
 
 function ProbabilityBadge({ probability }: { probability: number }) {
   const pct = Math.round(probability * 100);
-  const isCalibrated = probability >= 0.4 && probability <= 0.6;
+  const isCalibrated = probability >= 0.25 && probability <= 0.45;
   return (
     <span
       className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
@@ -52,27 +53,9 @@ function ProbabilityBadge({ probability }: { probability: number }) {
   );
 }
 
-type VideoStatsData = {
-  videoId: string;
-  title: string;
-  thumbnail: string;
-  channelTitle: string;
-  channelId: string;
-  description: string;
-  viewCount: number;
-  likeCount: number;
-  publishedAt: string;
-  categoryId?: string;
-};
-
-type SuggestionData = {
-  contract: ContractRecommendation | LLMContractRecommendation | null;
-  suggestedTitle: string | null;
-  videoAgeHours: number;
-  subscriberCount: number;
-  channelAvgViews: number;
-  duplicateWarning: boolean;
-};
+// Derived from action return types — stays in sync automatically when actions evolve.
+type VideoStatsData = VideoStatsSuccess;
+type SuggestionData = SuggestionSuccess;
 
 export default function CreateMarketPage() {
   const router = useRouter();
@@ -254,12 +237,11 @@ export default function CreateMarketPage() {
     });
   }
 
+  // Slider moves milestone only — resolution window is independent (one-way binding).
+  // Selecting a resolution button will proportionally update the milestone, but not vice versa.
   function handleMilestoneSlider(rawValue: string) {
     const value = Math.round(Number(rawValue));
     setMilestoneThreshold(String(value));
-    if (anchorMilestone !== null && anchorHours !== null) {
-      setResolutionHours(snapToPreset(anchorHours * (value / anchorMilestone)));
-    }
   }
 
   function handleResolutionButton(hours: number) {
@@ -384,8 +366,8 @@ export default function CreateMarketPage() {
         <input type="hidden" name="videoDescription" value={videoStats?.description ?? ""} />
         <input type="hidden" name="initialViewCount" value={videoStats?.viewCount ?? ""} />
         <input type="hidden" name="initialLikeCount" value={videoStats?.likeCount ?? ""} />
+        <input type="hidden" name="publishedAt" value={videoStats?.publishedAt ?? ""} />
         <input type="hidden" name="channelAvgViews" value={suggestion?.channelAvgViews ?? ""} />
-        <input type="hidden" name="videoAgeHours" value={suggestion?.videoAgeHours ?? ""} />
 
         {/* Market title — pre-populated from AI suggestion, editable */}
         <div>
