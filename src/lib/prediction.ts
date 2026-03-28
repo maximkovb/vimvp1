@@ -9,6 +9,8 @@ import {
   channelAvgAtHorizon,
   computeExpectedOutcome,
   HORIZON_FRACTION,
+  CALIBRATED_PROB_MIN,
+  CALIBRATED_PROB_MAX,
 } from "./calibration";
 
 export interface VideoContext {
@@ -58,7 +60,7 @@ const PREDICTION_TOOL: Anthropic.Tool = {
       milestoneThreshold: {
         type: "integer",
         description:
-          "The target view/like count. Must be >= 2.2× the expected outcome (max of velocity projection and channel avg at window horizon). Set it so estimatedProbability is 0.25–0.45.",
+          `The target view/like count. Must be >= 2.2× the expected outcome (max of velocity projection and channel avg at window horizon). Set it so estimatedProbability is ${CALIBRATED_PROB_MIN}–${CALIBRATED_PROB_MAX}.`,
       },
       resolutionHours: {
         type: "integer",
@@ -82,7 +84,7 @@ const PREDICTION_TOOL: Anthropic.Tool = {
       estimatedProbability: {
         type: "number",
         description:
-          "Your estimated probability that YES resolves (0–1). Target 0.25–0.45 for a well-calibrated market. Compute as: expected_outcome / milestoneThreshold, where expected_outcome = max(velocity_projection, channel_avg × horizon_fraction).",
+          `Your estimated probability that YES resolves (0–1). Target ${CALIBRATED_PROB_MIN}–${CALIBRATED_PROB_MAX} for a well-calibrated market. Compute as: expected_outcome / milestoneThreshold, where expected_outcome = max(velocity_projection, channel_avg × horizon_fraction).`,
       },
       suggestedTitle: {
         type: "string",
@@ -109,10 +111,10 @@ const PREDICTION_TOOL: Anthropic.Tool = {
 };
 
 // Prompt engineering for probability-anchored calibration.
-// PRIMARY GOAL: estimatedProbability must be 0.25–0.45. Milestone >= 2.2× expected outcome.
+// PRIMARY GOAL: estimatedProbability must be CALIBRATED_PROB_MIN–CALIBRATED_PROB_MAX. Milestone >= 2.2× expected outcome.
 const SYSTEM_PROMPT = `You are a calibrated viewership forecaster for a prediction market platform.
 
-PRIMARY CALIBRATION RULE: Set milestoneThreshold so that estimatedProbability is between 0.25 and 0.45.
+PRIMARY CALIBRATION RULE: Set milestoneThreshold so that estimatedProbability is between ${CALIBRATED_PROB_MIN} and ${CALIBRATED_PROB_MAX}.
 - Compute expected outcome: max(velocity_projection_at_chosen_window, channel_avg × horizon_fraction)
   where horizon_fraction = ${HORIZON_FRACTION[24]} for 24h, ${HORIZON_FRACTION[48]} for 48h, ${HORIZON_FRACTION[72]} for 72h
 - Compute: estimatedProbability = expected_outcome / milestoneThreshold

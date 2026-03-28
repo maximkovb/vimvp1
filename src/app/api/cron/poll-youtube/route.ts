@@ -4,7 +4,7 @@ import { markets, youtubePolls } from "@/db/schema";
 import { or, eq, sql } from "drizzle-orm";
 import { verifyCronAuth } from "@/lib/cron-auth";
 
-const YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3";
+import { YOUTUBE_API_BASE } from "@/lib/constants";
 
 interface YouTubeVideoListResponse {
   items?: Array<{

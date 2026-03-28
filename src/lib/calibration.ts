@@ -20,7 +20,15 @@
  * These are exported so the LLM system prompt (prediction.ts) stays in sync with the
  * algorithmic path. Change here → both paths update automatically.
  */
-export const HORIZON_FRACTION: Record<24 | 48 | 72, number> = {
+/** Target probability range for well-calibrated markets (lean toward failure). */
+export const CALIBRATED_PROB_MIN = 0.25;
+export const CALIBRATED_PROB_MAX = 0.45;
+
+/** All valid resolution windows. Extend here and the type follows automatically. */
+export const RESOLUTION_HOURS = [24, 48, 72] as const;
+export type ResolutionHours = (typeof RESOLUTION_HOURS)[number];
+
+export const HORIZON_FRACTION: Record<ResolutionHours, number> = {
   24: 0.55,
   48: 0.80,
   72: 1.00,
@@ -47,7 +55,7 @@ export function projectVelocity(
  */
 export function channelAvgAtHorizon(
   channelAvgViews: number,
-  windowHours: 24 | 48 | 72
+  windowHours: ResolutionHours
 ): number {
   return Math.round(channelAvgViews * HORIZON_FRACTION[windowHours]);
 }

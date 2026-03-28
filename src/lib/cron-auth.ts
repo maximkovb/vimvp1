@@ -1,5 +1,15 @@
 import { NextResponse } from "next/server";
-import { timingSafeEqual } from "crypto";
+import { timingSafeEqual, createHmac, randomBytes } from "crypto";
+
+// Per-process key: HMAC-normalizes both sides to a fixed length before comparison,
+// eliminating the length-based timing oracle of a direct Buffer comparison.
+const HMAC_KEY = randomBytes(32);
+
+function safeEqual(a: string, b: string): boolean {
+  const ha = createHmac("sha256", HMAC_KEY).update(a).digest();
+  const hb = createHmac("sha256", HMAC_KEY).update(b).digest();
+  return timingSafeEqual(ha, hb);
+}
 
 /**
  * Verify cron endpoint authorization using timing-safe comparison.
@@ -15,12 +25,7 @@ export function verifyCronAuth(request: Request): NextResponse | null {
   }
 
   const authHeader = request.headers.get("authorization") ?? "";
-  const expected = `Bearer ${secret}`;
-
-  if (
-    authHeader.length !== expected.length ||
-    !timingSafeEqual(Buffer.from(authHeader), Buffer.from(expected))
-  ) {
+  if (!safeEqual(authHeader, `Bearer ${secret}`)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

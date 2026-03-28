@@ -13,13 +13,10 @@ This version has breaking changes — APIs, conventions, and file structure may 
    Fast (~500ms). No channel analytics yet.
 
 2. **Phase 2 — Market suggestion** (`POST /api/admin/market-suggestion`)
+   Auth: `Authorization: Bearer <CRON_SECRET>`
    Body: `{ videoId, title, channelId, channelTitle, publishedAt, categoryId?, viewCount, likeCount }`
    Returns: `{ contract, suggestedTitle, videoAgeHours, subscriberCount, channelAvgViews, duplicateWarning }`
    Slow (~5–15s — calls YouTube channel API + LLM). Includes calibrated contract recommendation.
-   **Note:** The `/api/admin/market-suggestion` route currently requires the core logic to be
-   extracted from the session-gated server action before it will work. See the TODO in
-   `src/app/api/admin/market-suggestion/route.ts`. Until then, use the server action directly
-   from a browser session or supply contract parameters manually to `POST /api/markets`.
 
 3. **Create market** (`POST /api/markets`)
    Auth: `Authorization: Bearer <CRON_SECRET>`
@@ -36,7 +33,19 @@ Omitting any of these degrades the floor guard to velocity-only with age=1h (wea
 
 ### Draft vs. publish
 
-- `publishImmediately: true` — publishes immediately (what the admin UI always does)
-- `publishImmediately: false` — creates a draft (API default). The admin UI does not expose this option, but agents can use it to stage markets for review.
+- `publishImmediately: true` — publishes immediately (UI default)
+- `publishImmediately: false` — creates a draft (API default). The `marketId` is returned in the
+  201 response; use `GET /api/markets/[id]` to verify the draft was created.
+  **Note:** There is no bearer-token route to promote a draft to active (see todo #072).
+  Until that route exists, use `publishImmediately: true` if the agent should go live immediately.
 
 All routes use `Authorization: Bearer <CRON_SECRET>`.
+
+## Market Inspection
+
+- `GET /api/markets/[id]` — returns full market state: `{ id, title, status, priceYes, priceNo,
+  outcome, resolvesAt, resolvedAt, milestoneThreshold, priceHistory, recentTrades, pollHistory }`
+  No auth required. Use to verify creation or monitor status/price changes.
+
+- `GET /api/markets` — returns all active/halted/resolving markets + last 6 resolved.
+  No auth required. Response: `{ active: [...], resolved: [...] }`

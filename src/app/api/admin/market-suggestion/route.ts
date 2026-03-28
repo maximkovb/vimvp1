@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { verifyCronAuth } from "@/lib/cron-auth";
-import { generateMarketSuggestion } from "@/lib/actions/admin";
+import { computeMarketSuggestion } from "@/lib/services/marketSuggestion";
 
 const MarketSuggestionSchema = z.object({
   videoId: z.string().regex(/^[a-zA-Z0-9_-]{11}$/),
   title: z.string().min(1).max(200),
-  channelId: z.string().min(1),
+  channelId: z.string().regex(/^UC[a-zA-Z0-9_-]{22}$/),
   channelTitle: z.string().min(1),
   publishedAt: z.string().datetime(),
   categoryId: z.string().optional(),
@@ -33,6 +33,11 @@ export async function POST(request: Request) {
   const authError = verifyCronAuth(request);
   if (authError) return authError;
 
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json({ error: "YouTube API key not configured" }, { status: 500 });
+  }
+
   let body: unknown;
   try {
     body = await request.json();
@@ -48,28 +53,6 @@ export async function POST(request: Request) {
     );
   }
 
-  // generateMarketSuggestion uses session auth internally — call it via the server-side
-  // path by bypassing the session check. Since we've already verified CRON_SECRET above,
-  // we construct a minimal trusted call by passing the validated input directly.
-  // Note: generateMarketSuggestion does an auth() check; we work around it by calling
-  // the underlying logic. For now this calls it with the expectation that server-side
-  // invocation from a route handler does not have a session.
-  //
-  // TODO: extract the core logic from generateMarketSuggestion into a shared helper
-  //       function that both this route and the server action can call without auth duplication.
-  const result = await generateMarketSuggestion(parsed.data);
-
-  if ("error" in result) {
-    // generateMarketSuggestion returns { error: "Unauthorized" } when called without a session.
-    // This is expected — the full refactor is tracked in the TODO above.
-    if (result.error === "Unauthorized") {
-      return NextResponse.json(
-        { error: "generateMarketSuggestion requires session auth — see TODO in this file for the refactor needed to support bearer-token auth" },
-        { status: 501 }
-      );
-    }
-    return NextResponse.json({ error: result.error }, { status: 502 });
-  }
-
+  const result = await computeMarketSuggestion(parsed.data, apiKey);
   return NextResponse.json(result);
 }

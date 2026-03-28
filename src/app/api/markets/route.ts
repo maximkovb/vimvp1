@@ -5,7 +5,7 @@ import { desc, eq, or } from "drizzle-orm";
 import { getMarketPrices } from "@/lib/market-utils";
 import { allPrices } from "@/lib/lmsr";
 import { verifyCronAuth } from "@/lib/cron-auth";
-import { computeExpectedOutcome } from "@/lib/calibration";
+import { computeExpectedOutcome, RESOLUTION_HOURS } from "@/lib/calibration";
 import { z } from "zod";
 
 const CreateMarketSchema = z.object({
@@ -15,16 +15,25 @@ const CreateMarketSchema = z.object({
   questionType: z.enum(["views", "likes"]),
   milestoneThreshold: z.number().int().min(1).max(10_000_000_000),
   bParameter: z.number().min(1).max(1000),
-  resolutionHours: z.union([z.literal(24), z.literal(48), z.literal(72)]),
+  resolutionHours: z.union(
+    RESOLUTION_HOURS.map((h) => z.literal(h)) as [z.ZodLiteral<24>, z.ZodLiteral<48>, z.ZodLiteral<72>]
+  ),
   publishImmediately: z.boolean().default(false),
   // Optional calibration fields — used to enforce the channel-baseline floor guard.
   // Omitting them degrades to velocity-only floor (same as when channel data is unavailable).
   initialViewCount: z.number().int().min(0).optional(),
   channelAvgViews: z.number().int().min(0).optional(),
+  // publishedAt is the preferred way to supply video age — the server re-derives videoAgeHours
+  // from it at request time, preventing callers from submitting a stale age.
+  // videoAgeHours is accepted as a fallback when publishedAt is absent.
+  publishedAt: z.string().datetime().optional(),
   videoAgeHours: z.number().min(0.1).optional(),
   videoMetadata: z.object({
     title: z.string(),
-    thumbnail: z.string().default(""),
+    thumbnail: z.string()
+      .regex(/^https:\/\/i\.ytimg\.com\//)
+      .or(z.literal(""))
+      .default(""),
     channelTitle: z.string(),
     channelId: z.string().optional(),
     description: z.string().max(5000).optional(),
@@ -54,11 +63,14 @@ export async function POST(request: Request) {
   const data = parsed.data;
 
   // Floor guard — mirrors createMarket() in admin.ts.
-  // Callers that supply initialViewCount/channelAvgViews/videoAgeHours get full calibration;
-  // omitting them degrades to velocity-only floor (channelAvgViews=0, age=1h).
+  // Prefer publishedAt for age derivation (server-computed, can't be spoofed).
+  // Fall back to caller-supplied videoAgeHours, then 1h default.
   const floorBase = data.initialViewCount ?? 0;
   const floorChannelAvg = data.channelAvgViews ?? 0;
-  const floorAge = data.videoAgeHours ?? 1;
+  const floorAge =
+    data.publishedAt && !isNaN(Date.parse(data.publishedAt))
+      ? Math.max((Date.now() - new Date(data.publishedAt).getTime()) / 3_600_000, 0.1)
+      : (data.videoAgeHours ?? 1);
   const requiredFloor = computeExpectedOutcome(
     floorBase,
     floorAge,
@@ -79,30 +91,34 @@ export async function POST(request: Request) {
   const haltsAt = new Date(resolvesAt.getTime() - 5 * 60 * 1000);
   const marketId = crypto.randomUUID();
 
-  await db.insert(markets).values({
-    id: marketId,
-    youtubeVideoId: data.youtubeVideoId,
-    title: data.title,
-    description: data.description ?? null,
-    questionType: data.questionType,
-    milestoneThreshold: BigInt(data.milestoneThreshold),
-    bParameter: data.bParameter.toFixed(2),
-    status: data.publishImmediately ? "active" : "draft",
-    videoMetadata: data.videoMetadata,
-    opensAt: data.publishImmediately ? now : null,
-    haltsAt: data.publishImmediately ? haltsAt : null,
-    resolvesAt: data.publishImmediately ? resolvesAt : null,
-    createdBy: null, // API-created markets have no user session
-  });
-
-  if (data.publishImmediately) {
-    const prices = allPrices([0, 0], data.bParameter);
-    await db.insert(priceSnapshots).values({
-      marketId,
-      priceYes: prices[0].toFixed(6),
-      priceNo: prices[1].toFixed(6),
+  // Atomic: market row + initial price snapshot in a single transaction.
+  // Without this, a crash between the two inserts leaves an orphaned market with no pricing.
+  await db.transaction(async (tx) => {
+    await tx.insert(markets).values({
+      id: marketId,
+      youtubeVideoId: data.youtubeVideoId,
+      title: data.title,
+      description: data.description ?? null,
+      questionType: data.questionType,
+      milestoneThreshold: BigInt(data.milestoneThreshold),
+      bParameter: data.bParameter.toFixed(2),
+      status: data.publishImmediately ? "active" : "draft",
+      videoMetadata: data.videoMetadata,
+      opensAt: data.publishImmediately ? now : null,
+      haltsAt: data.publishImmediately ? haltsAt : null,
+      resolvesAt: data.publishImmediately ? resolvesAt : null,
+      createdBy: null, // API-created markets have no user session
     });
-  }
+
+    if (data.publishImmediately) {
+      const prices = allPrices([0, 0], data.bParameter);
+      await tx.insert(priceSnapshots).values({
+        marketId,
+        priceYes: prices[0].toFixed(6),
+        priceNo: prices[1].toFixed(6),
+      });
+    }
+  });
 
   return NextResponse.json({ marketId }, { status: 201 });
 }

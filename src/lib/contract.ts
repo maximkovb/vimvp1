@@ -1,6 +1,7 @@
 import {
   computeExpectedOutcome,
   computeCalibrationProbability,
+  type ResolutionHours,
 } from "./calibration";
 
 export type RiskTier = "low" | "medium" | "high";
@@ -11,7 +12,7 @@ export interface ContractRecommendation {
   riskTier: RiskTier;
   milestoneThreshold: number;
   bParameter: number;
-  resolutionHours: 24 | 48 | 72;
+  resolutionHours: ResolutionHours;
   /** Estimated probability of YES resolving (0–1). Used to display calibration quality to admin. */
   estimatedProbability: number;
 }
@@ -115,7 +116,7 @@ export function roundToClean(value: number): number {
  *
  * @param videoAgeHours  - Age of the video in hours at fetch time
  */
-export function resolveWindow(videoAgeHours: number): 24 | 48 | 72 {
+export function resolveWindow(videoAgeHours: number): ResolutionHours {
   // 24h: use unless video is ≥20h old (less than 4h would remain in the window)
   if (videoAgeHours < 20) return 24;
   // 48h: use when video is 20–43h old

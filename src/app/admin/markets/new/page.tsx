@@ -9,6 +9,7 @@ import { isLLMRecommendation } from "@/lib/contract";
 
 import { computeStep, computeMilestoneFloor, computeProbability } from "./helpers";
 import { formatCount } from "@/lib/format";
+import { CALIBRATED_PROB_MIN, CALIBRATED_PROB_MAX } from "@/lib/calibration";
 import { MarketStatsPanel } from "@/components/admin/MarketStatsPanel";
 
 const RESOLUTION_PRESETS = [24, 48, 72] as const;
@@ -39,7 +40,7 @@ function RiskBadge({ tier }: { tier: RiskTier }) {
 
 function ProbabilityBadge({ probability }: { probability: number }) {
   const pct = Math.round(probability * 100);
-  const isCalibrated = probability >= 0.25 && probability <= 0.45;
+  const isCalibrated = probability >= CALIBRATED_PROB_MIN && probability <= CALIBRATED_PROB_MAX;
   return (
     <span
       className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${

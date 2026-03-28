@@ -10,22 +10,9 @@ import { computeMilestoneFloor } from "@/lib/market-utils";
 import { computeExpectedOutcome } from "@/lib/calibration";
 import { revalidatePath } from "next/cache";
 import { distributePayout, refundPositions } from "@/lib/services/payout";
-import {
-  calculateConfidence,
-  calculateContractRecommendations,
-  type ContractRecommendation,
-  type LLMContractRecommendation,
-} from "@/lib/contract";
-import {
-  generateContractPrediction,
-  type VideoContext,
-} from "@/lib/prediction";
-import { YOUTUBE_THUMBNAIL_RE } from "@/lib/constants";
-
-const YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3";
-
-/** Fetch timeout — prevents hung calls from blocking the 30s worker budget. */
-const YT_TIMEOUT_MS = 8_000;
+import { YOUTUBE_THUMBNAIL_RE, YOUTUBE_API_BASE, YT_TIMEOUT_MS } from "@/lib/constants";
+import { extractVideoId } from "@/lib/youtube";
+import { computeMarketSuggestion } from "@/lib/services/marketSuggestion";
 
 // ─── YouTube API response shapes ────────────────────────────────────────────
 
@@ -48,63 +35,8 @@ interface YTVideoItem {
   };
 }
 
-interface YTChannelItem {
-  statistics: { subscriberCount?: string };
-  contentDetails: { relatedPlaylists: { uploads: string } };
-}
-
-interface YTPlaylistItem {
-  contentDetails: { videoId: string };
-}
-
-interface YTStatsItem {
-  statistics: { viewCount?: string };
-}
-
 interface YTListResponse<T> {
   items?: T[];
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function extractVideoId(url: string): string | null {
-  const patterns = [
-    /(?:youtube\.com\/watch\?v=)([a-zA-Z0-9_-]{11})/,
-    /(?:youtu\.be\/)([a-zA-Z0-9_-]{11})/,
-    /(?:youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
-    /(?:youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
-  ];
-  for (const pattern of patterns) {
-    const match = url.match(pattern);
-    if (match) return match[1];
-  }
-  // Maybe it's already just a video ID
-  if (/^[a-zA-Z0-9_-]{11}$/.test(url)) return url;
-  return null;
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/** Generate a template market title for the algorithmic fallback path. */
-function generateTemplateTitle(
-  milestone: number,
-  metric: "views" | "likes",
-  windowHours: number,
-  outperformanceFactor: number,
-  subscriberCount: number
-): string {
-  const n = milestone.toLocaleString();
-  const m = metric;
-  if (subscriberCount < 100_000 && outperformanceFactor > 1.5) {
-    return `Can this underdog Short crack ${n} ${m} in ${windowHours}h?`;
-  }
-  if (outperformanceFactor > 3.0) {
-    return `This Short is blowing up — will it hit ${n} ${m} in ${windowHours}h?`;
-  }
-  if (windowHours <= 24) {
-    return `Just 24h to decide — will this Short crack ${n} ${m}?`;
-  }
-  return `Will this Short hit ${n} ${m} in ${windowHours}h?`;
 }
 
 // ─── Actions ─────────────────────────────────────────────────────────────────
@@ -170,8 +102,10 @@ export async function fetchVideoStats(url: string) {
 
 /**
  * Phase 2 of two-phase fetch — channel analytics + market suggestion (~5–15s with LLM).
- * Fetches channel baseline, computes velocity, runs LLM (with algorithmic fallback).
- * Returns the contract recommendation plus stats for the admin stats panel.
+ * Auth wrapper around computeMarketSuggestion() — session-gated for browser use.
+ *
+ * Called by: admin UI (session auth).
+ * For bearer-token access, POST /api/admin/market-suggestion calls computeMarketSuggestion() directly.
  */
 export async function generateMarketSuggestion(input: {
   videoId: string;
@@ -189,146 +123,7 @@ export async function generateMarketSuggestion(input: {
   const apiKey = process.env.YOUTUBE_API_KEY;
   if (!apiKey) return { error: "YouTube API key not configured" };
 
-  const { videoId, title, channelId, channelTitle, publishedAt, categoryId, viewCount, likeCount } = input;
-
-  const videoAgeHours = Math.max(
-    (Date.now() - new Date(publishedAt).getTime()) / 3_600_000,
-    0.1
-  );
-
-  // Warn admin if an active or draft market already exists for this video
-  const existing = await db
-    .select({ id: markets.id })
-    .from(markets)
-    .where(
-      and(
-        eq(markets.youtubeVideoId, videoId),
-        or(eq(markets.status, "active"), eq(markets.status, "draft"))
-      )
-    )
-    .limit(1);
-  const duplicateWarning = existing.length > 0;
-
-  let contract: ContractRecommendation | LLMContractRecommendation | null = null;
-  let subscriberCount = 0;
-  let channelAvgViews = viewCount; // fallback if channel fetch fails
-
-  try {
-    const channelRes = await fetch(
-      `${YOUTUBE_API_BASE}/channels?part=statistics,contentDetails&id=${channelId}&key=${apiKey}&fields=items(statistics/subscriberCount,contentDetails/relatedPlaylists/uploads)`,
-      { cache: "no-store", signal: AbortSignal.timeout(YT_TIMEOUT_MS) }
-    );
-    const channelData: YTListResponse<YTChannelItem> | null = channelRes.ok
-      ? await channelRes.json()
-      : null;
-    subscriberCount = Number(channelData?.items?.[0]?.statistics?.subscriberCount ?? 0);
-    const uploadsPlaylistId = channelData?.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
-
-    let recentViewCounts: number[] = [];
-    if (uploadsPlaylistId) {
-      const playlistRes = await fetch(
-        `${YOUTUBE_API_BASE}/playlistItems?part=contentDetails&playlistId=${uploadsPlaylistId}&maxResults=10&key=${apiKey}&fields=items(contentDetails/videoId)`,
-        { cache: "no-store", signal: AbortSignal.timeout(YT_TIMEOUT_MS) }
-      );
-      if (playlistRes.ok) {
-        const playlistData: YTListResponse<YTPlaylistItem> = await playlistRes.json();
-        const recentVideoIds = (playlistData.items ?? [])
-          .map((v) => v.contentDetails.videoId)
-          .filter(Boolean);
-
-        if (recentVideoIds.length > 0) {
-          const statsRes = await fetch(
-            `${YOUTUBE_API_BASE}/videos?part=statistics&id=${recentVideoIds.join(",")}&key=${apiKey}&fields=items(statistics/viewCount)`,
-            { cache: "no-store", signal: AbortSignal.timeout(YT_TIMEOUT_MS) }
-          );
-          if (statsRes.ok) {
-            const statsData: YTListResponse<YTStatsItem> = await statsRes.json();
-            recentViewCounts = (statsData.items ?? []).map((v) =>
-              parseInt(v.statistics.viewCount || "0")
-            );
-          }
-        }
-      }
-    }
-
-    const mean =
-      recentViewCounts.length > 0
-        ? recentViewCounts.reduce((a, b) => a + b, 0) / recentViewCounts.length
-        : viewCount;
-    const stdDev =
-      recentViewCounts.length > 1
-        ? Math.sqrt(
-            recentViewCounts.reduce((s, v) => s + (v - mean) ** 2, 0) /
-              recentViewCounts.length
-          )
-        : 0;
-
-    channelAvgViews = mean;
-
-    const confidence = calculateConfidence(
-      videoAgeHours,
-      recentViewCounts,
-      recentViewCounts.length > 1 ? mean : undefined,
-      recentViewCounts.length > 1 ? stdDev : undefined
-    );
-
-    let suggestedTitle: string | null = null;
-
-    try {
-      const videoContext: VideoContext = {
-        videoTitle: title,
-        channelName: channelTitle,
-        videoCategory: categoryId,
-        videoAgeHours,
-        publishedDayOfWeek: new Date(publishedAt).getUTCDay(),
-        publishedHourUTC: new Date(publishedAt).getUTCHours(),
-        currentViews: viewCount,
-        currentLikes: likeCount,
-        subscriberCount,
-        channelAvgViews: mean,
-        channelStdDev: stdDev,
-      };
-      const llmContract = await generateContractPrediction(videoContext);
-      contract = llmContract;
-      suggestedTitle = llmContract.suggestedTitle;
-    } catch {
-      // LLM failed — algorithmic fallback. generateContractPrediction already logged.
-      contract = calculateContractRecommendations(
-        confidence,
-        viewCount,
-        videoAgeHours,
-        recentViewCounts,
-        mean
-      );
-      const outperformanceFactor = mean > 0 ? viewCount / mean : 1.0;
-      suggestedTitle = generateTemplateTitle(
-        contract.milestoneThreshold,
-        "views",
-        contract.resolutionHours,
-        outperformanceFactor,
-        subscriberCount
-      );
-    }
-
-    return {
-      contract,
-      suggestedTitle,
-      videoAgeHours,
-      subscriberCount,
-      channelAvgViews,
-      duplicateWarning,
-    };
-  } catch {
-    // Channel fetch failed — return null contract so UI can still render stats panel
-    return {
-      contract: null,
-      suggestedTitle: null,
-      videoAgeHours,
-      subscriberCount,
-      channelAvgViews,
-      duplicateWarning,
-    };
-  }
+  return computeMarketSuggestion(input, apiKey);
 }
 
 export async function createMarket(formData: FormData) {
@@ -405,7 +200,12 @@ export async function createMarket(formData: FormData) {
       ? Math.max((Date.now() - new Date(publishedAtStr).getTime()) / 3_600_000, 0.1)
       : 1;
 
-  const resolutionHoursNum = parseInt(resolutionHours || "72");
+  // Validate resolutionHours before using it in any computation.
+  const resolutionHoursNum = parseInt(resolutionHours || "");
+  if (![24, 48, 72].includes(resolutionHoursNum) || isNaN(resolutionHoursNum)) {
+    return { error: "resolutionHours must be 24, 48, or 72" };
+  }
+
   const requiredFloor = computeExpectedOutcome(
     initialCount,
     videoAgeHoursVal,
@@ -431,10 +231,7 @@ export async function createMarket(formData: FormData) {
   const thumbnail = YOUTUBE_THUMBNAIL_RE.test(thumbnailRaw) ? thumbnailRaw : "";
 
   const now = new Date();
-  const hours = parseInt(resolutionHours || "72");
-  if (![24, 48, 72].includes(hours)) {
-    return { error: "resolutionHours must be 24, 48, or 72" };
-  }
+  const hours = resolutionHoursNum;
   const resolvesAt = new Date(now.getTime() + hours * 60 * 60 * 1000);
   const haltsAt = new Date(resolvesAt.getTime() - 5 * 60 * 1000);
 

@@ -1,23 +1,7 @@
 import { NextResponse } from "next/server";
 import { verifyCronAuth } from "@/lib/cron-auth";
-
-const YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3";
-const YT_TIMEOUT_MS = 8_000;
-
-function extractVideoId(url: string): string | null {
-  const patterns = [
-    /(?:youtube\.com\/watch\?v=)([a-zA-Z0-9_-]{11})/,
-    /(?:youtu\.be\/)([a-zA-Z0-9_-]{11})/,
-    /(?:youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
-    /(?:youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
-  ];
-  for (const pattern of patterns) {
-    const match = url.match(pattern);
-    if (match) return match[1];
-  }
-  if (/^[a-zA-Z0-9_-]{11}$/.test(url)) return url;
-  return null;
-}
+import { YOUTUBE_API_BASE, YT_TIMEOUT_MS } from "@/lib/constants";
+import { extractVideoId } from "@/lib/youtube";
 
 /**
  * GET /api/admin/video-stats?url=<youtubeUrl>
@@ -52,7 +36,7 @@ export async function GET(request: Request) {
 
   const videoRes = await fetch(
     `${YOUTUBE_API_BASE}/videos?part=snippet,statistics&id=${videoId}&key=${apiKey}&fields=items(snippet(title,thumbnails,channelTitle,channelId,publishedAt,categoryId,description),statistics(viewCount,likeCount))`,
-    { cache: "no-store", signal: AbortSignal.timeout(YT_TIMEOUT_MS) }
+    { next: { revalidate: 300 }, signal: AbortSignal.timeout(YT_TIMEOUT_MS) }
   );
 
   if (!videoRes.ok) {

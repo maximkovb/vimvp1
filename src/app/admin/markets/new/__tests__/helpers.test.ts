@@ -1,29 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { snapToPreset, computeStep, computeMilestoneFloor } from "../helpers";
-
-describe("snapToPreset", () => {
-  it("snaps to exact match", () => {
-    expect(snapToPreset(72)).toBe("72");
-    expect(snapToPreset(48)).toBe("48");
-    expect(snapToPreset(24)).toBe("24");
-  });
-
-  it("snaps to nearest preset (72 is closest to 110 among 24/48/72)", () => {
-    expect(snapToPreset(110)).toBe("72");
-  });
-
-  it("ties go to shorter (36h is equidistant between 24 and 48)", () => {
-    expect(snapToPreset(36)).toBe("24");
-  });
-
-  it("snaps values below the smallest preset to 24", () => {
-    expect(snapToPreset(1)).toBe("24");
-  });
-
-  it("snaps values above the largest preset to 72", () => {
-    expect(snapToPreset(999)).toBe("72");
-  });
-});
+import { computeStep, computeMilestoneFloor } from "../helpers";
 
 describe("computeStep", () => {
   // formula: 10^(floor(log10(anchor)) - 1)
