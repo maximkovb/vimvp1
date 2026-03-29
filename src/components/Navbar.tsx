@@ -35,6 +35,12 @@ export async function Navbar() {
                 >
                   Leaderboard
                 </Link>
+                <Link
+                  href="/history"
+                  className="text-muted hover:text-foreground transition-colors"
+                >
+                  History
+                </Link>
               </>
             )}
           </div>

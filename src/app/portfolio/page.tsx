@@ -85,7 +85,7 @@ export default async function PortfolioPage() {
     };
   });
 
-  // Recent trades
+  // Recent trades (preview only — full history at /history)
   const recentTrades = await db
     .select({
       trade: trades,
@@ -95,7 +95,7 @@ export default async function PortfolioPage() {
     .innerJoin(markets, eq(trades.marketId, markets.id))
     .where(eq(trades.userId, userId))
     .orderBy(desc(trades.createdAt))
-    .limit(20);
+    .limit(5);
 
   const balance = parseFloat(user?.balance || "0");
   const totalValue = balance + openValue;
@@ -229,7 +229,9 @@ export default async function PortfolioPage() {
                     <th className="text-center p-3 font-medium">Your Bet</th>
                     <th className="text-center p-3 font-medium">Result</th>
                     <th className="text-right p-3 font-medium">Shares</th>
+                    <th className="text-right p-3 font-medium">Cost</th>
                     <th className="text-right p-3 font-medium">Payout</th>
+                    <th className="text-right p-3 font-medium">Net P&L</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -237,6 +239,8 @@ export default async function PortfolioPage() {
                     const won = p.position.outcome === p.market.outcome;
                     const shares = parseFloat(p.position.shares);
                     const payout = won ? shares : 0;
+                    const cost = parseFloat(p.position.avgCostBasis) * shares;
+                    const netPnl = payout - cost;
                     return (
                       <tr
                         key={p.position.id}
@@ -263,12 +267,23 @@ export default async function PortfolioPage() {
                           </span>
                         </td>
                         <td className="p-3 text-right">{shares.toFixed(1)}</td>
+                        <td className="p-3 text-right text-muted">
+                          {cost.toFixed(1)}
+                        </td>
                         <td
                           className={`p-3 text-right font-medium ${
                             won ? "text-green" : "text-muted"
                           }`}
                         >
                           {payout.toFixed(1)}
+                        </td>
+                        <td
+                          className={`p-3 text-right font-medium ${
+                            netPnl >= 0 ? "text-green" : "text-red"
+                          }`}
+                        >
+                          {netPnl >= 0 ? "+" : ""}
+                          {netPnl.toFixed(1)}
                         </td>
                       </tr>
                     );
@@ -282,7 +297,12 @@ export default async function PortfolioPage() {
 
       {/* Recent trades */}
       <section>
-        <h2 className="text-lg font-semibold mb-3">Trade History</h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold">Recent Trades</h2>
+          <Link href="/history" className="text-sm text-accent hover:underline">
+            View all →
+          </Link>
+        </div>
         {recentTrades.length > 0 ? (
           <div className="bg-card border border-border rounded-xl p-4 space-y-2">
             {recentTrades.map((t) => (

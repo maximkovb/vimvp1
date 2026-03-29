@@ -1,6 +1,6 @@
 import { db } from "@/db";
 import { users, positions, markets } from "@/db/schema";
-import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, ne, sql } from "drizzle-orm";
 import { getMarketPrices } from "@/lib/market-utils";
 
 const TOP_N = 100;
@@ -36,6 +36,28 @@ export default async function LeaderboardPage() {
         .where(and(ne(positions.shares, "0"), inArray(positions.userId, topUserIds)))
     : [];
 
+  // Win/loss stats on resolved markets
+  const winStats = topUserIds.length > 0
+    ? await db
+        .select({
+          userId: positions.userId,
+          wins: sql<number>`count(*) filter (where ${positions.outcome} = ${markets.outcome})`,
+          total: sql<number>`count(*)`,
+        })
+        .from(positions)
+        .innerJoin(
+          markets,
+          and(eq(positions.marketId, markets.id), eq(markets.status, "resolved"))
+        )
+        .where(and(gt(positions.shares, "0"), inArray(positions.userId, topUserIds)))
+        .groupBy(positions.userId)
+    : [];
+
+  const winStatsByUser = new Map<string, { wins: number; total: number }>();
+  for (const ws of winStats) {
+    winStatsByUser.set(ws.userId, { wins: Number(ws.wins), total: Number(ws.total) });
+  }
+
   // Group positions by userId
   const positionsByUser = new Map<string, typeof allPositions>();
   for (const pos of allPositions) {
@@ -56,7 +78,9 @@ export default async function LeaderboardPage() {
     }
 
     const totalValue = parseFloat(user.balance) + positionsValue;
-    return { ...user, positionsValue, totalValue };
+    const ws = winStatsByUser.get(user.id);
+    const winRate = ws && ws.total > 0 ? ws.wins / ws.total : null;
+    return { ...user, positionsValue, totalValue, winRate, winTotal: ws?.total ?? 0 };
   });
 
   ranked.sort((a, b) => b.totalValue - a.totalValue);
@@ -74,6 +98,7 @@ export default async function LeaderboardPage() {
               <th className="text-right p-3 font-medium">Balance</th>
               <th className="text-right p-3 font-medium">Positions</th>
               <th className="text-right p-3 font-medium">Total Value</th>
+              <th className="text-right p-3 font-medium">Win Rate</th>
               <th className="text-right p-3 font-medium">Streak</th>
             </tr>
           </thead>
@@ -105,6 +130,11 @@ export default async function LeaderboardPage() {
                   {user.totalValue.toLocaleString(undefined, {
                     maximumFractionDigits: 0,
                   })}
+                </td>
+                <td className="p-3 text-right text-muted">
+                  {user.winRate !== null
+                    ? `${Math.round(user.winRate * 100)}%`
+                    : "—"}
                 </td>
                 <td className="p-3 text-right">
                   {user.loginStreak > 0 ? `${user.loginStreak}d` : "—"}
