@@ -8,6 +8,7 @@ import { extractVideoId } from "@/lib/youtube";
 export default function QuickCreatePage() {
   const [videoUrl, setVideoUrl] = useState("");
   const [videoStats, setVideoStats] = useState<VideoStatsSuccess | null>(null);
+  const [contractTitle, setContractTitle] = useState("");
   const [milestone, setMilestone] = useState("");
   const [questionType, setQuestionType] = useState<"views" | "likes">("views");
   const [isFetching, setIsFetching] = useState(false);
@@ -22,6 +23,7 @@ export default function QuickCreatePage() {
 
     // Reset state before await to prevent stale values on re-fetch
     setVideoStats(null);
+    setContractTitle("");
     setFetchError("");
     setCreateError("");
     setCreatedId(null);
@@ -34,6 +36,7 @@ export default function QuickCreatePage() {
       setFetchError(result.error as string);
     } else {
       setVideoStats(result);
+      setContractTitle(result.title);
     }
   }
 
@@ -49,7 +52,7 @@ export default function QuickCreatePage() {
     setIsCreating(true);
     setCreateError("");
 
-    const result = await createTestMarket(videoUrl.trim(), milestoneNum, questionType);
+    const result = await createTestMarket(videoUrl.trim(), milestoneNum, questionType, contractTitle.trim());
     setIsCreating(false);
 
     if ("error" in result) {
@@ -60,7 +63,8 @@ export default function QuickCreatePage() {
   }
 
   const canFetch = !!extractVideoId(videoUrl.trim()) && !isFetching;
-  const canCreate = !!videoStats && !!milestone && parseFloat(milestone) >= 1 && !isCreating;
+  const canCreate = !!videoStats && !!milestone && parseFloat(milestone) >= 1
+    && contractTitle.trim().length > 0 && !isCreating;
 
   return (
     <div className="max-w-lg">
@@ -107,12 +111,22 @@ export default function QuickCreatePage() {
                 className="w-24 aspect-video object-cover rounded flex-shrink-0"
               />
             )}
-            <div className="min-w-0">
-              <div className="text-sm font-medium truncate">{videoStats.title}</div>
+            <div className="min-w-0 flex-1">
+              <div className="text-xs text-muted truncate">{videoStats.title}</div>
               <div className="text-xs text-muted mt-0.5">{videoStats.channelTitle}</div>
               <div className="text-xs text-muted mt-1">
                 {videoStats.viewCount.toLocaleString()} views ·{" "}
                 {videoStats.likeCount.toLocaleString()} likes
+              </div>
+              <div className="mt-2">
+                <label className="block text-xs text-muted mb-1">Contract title</label>
+                <input
+                  type="text"
+                  value={contractTitle}
+                  onChange={(e) => setContractTitle(e.target.value)}
+                  placeholder='e.g. "Will this hit 1M views in 48h?"'
+                  className="w-full px-2 py-1.5 bg-card border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-accent"
+                />
               </div>
             </div>
           </div>

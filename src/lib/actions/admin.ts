@@ -396,7 +396,8 @@ export async function manualResolve(marketId: string, outcome: number) {
 export async function createTestMarket(
   videoUrl: string,
   milestoneThreshold: number,
-  questionType: "views" | "likes"
+  questionType: "views" | "likes",
+  contractTitle: string
 ) {
   const session = await auth();
   if (!isAdmin(session)) return { error: "Unauthorized" };
@@ -446,7 +447,7 @@ export async function createTestMarket(
     await tx.insert(markets).values({
       id: marketId,
       youtubeVideoId: videoId,
-      title: item.snippet.title,
+      title: contractTitle.trim(),
       questionType,
       milestoneThreshold: BigInt(Math.round(milestoneThreshold)),
       bParameter: b.toFixed(2),
