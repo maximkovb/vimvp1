@@ -6,6 +6,7 @@ import {
   publishMarket,
   cancelMarket,
   manualResolve,
+  resolveNow,
 } from "@/lib/actions/admin";
 
 interface Props {
@@ -51,6 +52,20 @@ export function AdminMarketActions({ marketId, status }: Props) {
           className="px-2 py-1 text-xs bg-red/10 text-red rounded hover:bg-red/20 transition-colors disabled:opacity-50"
         >
           Cancel
+        </button>
+      )}
+
+      {(status === "active" || status === "halted") && (
+        <button
+          onClick={() => {
+            if (confirm("Resolve using oracle (latest poll data)?")) {
+              handleAction(() => resolveNow(marketId));
+            }
+          }}
+          disabled={isPending}
+          className="px-2 py-1 text-xs bg-yellow-500/10 text-yellow-500 rounded hover:bg-yellow-500/20 transition-colors disabled:opacity-50"
+        >
+          Resolve Now
         </button>
       )}
 

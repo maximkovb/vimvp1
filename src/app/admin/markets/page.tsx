@@ -53,12 +53,17 @@ export default async function AdminMarketsPage() {
       {/* Markets list */}
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold">All Markets</h2>
-        <Link
-          href="/admin/markets/new"
-          className="px-3 py-1.5 bg-accent text-white text-sm rounded-lg hover:bg-accent-hover transition-colors"
-        >
-          + Create Market
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link href="/admin/markets/quick" className="text-xs text-muted hover:text-foreground">
+            Quick Create (test) →
+          </Link>
+          <Link
+            href="/admin/markets/new"
+            className="px-3 py-1.5 bg-accent text-white text-sm rounded-lg hover:bg-accent-hover transition-colors"
+          >
+            + Create Market
+          </Link>
+        </div>
       </div>
 
       {allMarkets.length > 0 ? (

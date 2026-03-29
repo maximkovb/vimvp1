@@ -13,6 +13,7 @@ import { distributePayout, refundPositions } from "@/lib/services/payout";
 import { YOUTUBE_THUMBNAIL_RE, YOUTUBE_API_BASE, YT_TIMEOUT_MS } from "@/lib/constants";
 import { extractVideoId } from "@/lib/youtube";
 import { computeMarketSuggestion } from "@/lib/services/marketSuggestion";
+import { resolveMarket } from "@/lib/oracle";
 
 // ─── YouTube API response shapes ────────────────────────────────────────────
 
@@ -385,4 +386,139 @@ export async function manualResolve(marketId: string, outcome: number) {
     revalidatePath("/admin/markets");
   }
   return result;
+}
+
+/**
+ * Quick test market creation — bypasses the two-phase AI suggestion pipeline.
+ * Uses b=0.01 and a fixed 48h resolution window for fast oracle testing.
+ * Admin-only.
+ */
+export async function createTestMarket(
+  videoUrl: string,
+  milestoneThreshold: number,
+  questionType: "views" | "likes"
+) {
+  const session = await auth();
+  if (!isAdmin(session)) return { error: "Unauthorized" };
+
+  const videoId = extractVideoId(videoUrl);
+  if (!videoId) return { error: "Invalid YouTube URL" };
+
+  if (!isFinite(milestoneThreshold) || milestoneThreshold < 1) {
+    return { error: "Milestone must be at least 1" };
+  }
+
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  if (!apiKey) return { error: "YouTube API key not configured" };
+
+  // Fetch video stats inline (same pattern as fetchVideoStats — avoids circular action call)
+  const videoRes = await fetch(
+    `${YOUTUBE_API_BASE}/videos?part=snippet,statistics&id=${videoId}&key=${apiKey}&fields=items(snippet(title,thumbnails,channelTitle,channelId),statistics(viewCount,likeCount))`,
+    { cache: "no-store", signal: AbortSignal.timeout(YT_TIMEOUT_MS) }
+  );
+
+  if (!videoRes.ok) {
+    return { error: `YouTube API error: ${videoRes.status}` };
+  }
+
+  const videoData: YTListResponse<YTVideoItem> = await videoRes.json();
+  if (!videoData.items || videoData.items.length === 0) {
+    return { error: "Video not found or is private" };
+  }
+
+  const item = videoData.items[0];
+  const thumbnailRaw =
+    item.snippet.thumbnails?.medium?.url ??
+    item.snippet.thumbnails?.default?.url ??
+    "";
+  const thumbnail = YOUTUBE_THUMBNAIL_RE.test(thumbnailRaw) ? thumbnailRaw : "";
+  const viewCount = parseInt(item.statistics.viewCount || "0", 10);
+  const likeCount = parseInt(item.statistics.likeCount || "0", 10);
+
+  const now = new Date();
+  const resolvesAt = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+  const haltsAt = new Date(resolvesAt.getTime() - 5 * 60 * 1000);
+  const b = 0.01;
+  const prices = allPrices([0, 0], b);
+  const marketId = crypto.randomUUID();
+
+  await db.transaction(async (tx) => {
+    await tx.insert(markets).values({
+      id: marketId,
+      youtubeVideoId: videoId,
+      title: item.snippet.title,
+      questionType,
+      milestoneThreshold: BigInt(Math.round(milestoneThreshold)),
+      bParameter: b.toFixed(2),
+      status: "active",
+      videoMetadata: {
+        title: item.snippet.title,
+        thumbnail,
+        channelTitle: item.snippet.channelTitle,
+        ...(item.snippet.channelId ? { channelId: item.snippet.channelId } : {}),
+      },
+      opensAt: now,
+      haltsAt,
+      resolvesAt,
+      createdBy: session!.user!.id!,
+    });
+
+    await tx.insert(priceSnapshots).values({
+      marketId,
+      priceYes: prices[0].toFixed(6),
+      priceNo: prices[1].toFixed(6),
+    });
+
+    await tx.insert(youtubePolls).values({
+      marketId,
+      viewCount: BigInt(viewCount),
+      likeCount: BigInt(likeCount),
+    });
+  });
+
+  revalidatePath("/");
+  revalidatePath("/admin/markets");
+  return { success: true as const, marketId };
+}
+
+/**
+ * Force-resolve a market via the oracle using the latest poll data.
+ * For testing: works on active/halted markets, not just resolving/failed.
+ * Transitions status to "resolving" then calls resolveMarket() from oracle.
+ * Admin-only.
+ */
+export async function resolveNow(marketId: string) {
+  const session = await auth();
+  if (!isAdmin(session)) return { error: "Unauthorized" };
+
+  const [market] = await db
+    .select()
+    .from(markets)
+    .where(eq(markets.id, marketId))
+    .limit(1);
+
+  if (!market) return { error: "Market not found" };
+
+  const finalStatuses = ["resolved", "cancelled"];
+  if (finalStatuses.includes(market.status)) {
+    return { error: `Market is already ${market.status}` };
+  }
+
+  // Transition to "resolving" so the oracle's idempotency guard passes
+  await db
+    .update(markets)
+    .set({ status: "resolving" })
+    .where(and(eq(markets.id, marketId), eq(markets.status, market.status)));
+
+  try {
+    await resolveMarket(marketId);
+  } catch (err) {
+    // If oracle fails (e.g., no poll data), surface a clear message
+    const message = err instanceof Error ? err.message : String(err);
+    return { error: message };
+  }
+
+  revalidatePath("/");
+  revalidatePath("/admin/markets");
+  return { success: true as const };
 }
