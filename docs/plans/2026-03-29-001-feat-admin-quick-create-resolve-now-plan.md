@@ -1,7 +1,7 @@
 ---
 title: "feat: Admin Quick Test Market Creation + Resolve Now Button"
 type: feat
-status: active
+status: completed
 date: 2026-03-29
 ---
 
