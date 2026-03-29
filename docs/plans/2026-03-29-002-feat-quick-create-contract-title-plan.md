@@ -1,7 +1,7 @@
 ---
 title: "feat: Quick Create — editable contract title in video preview"
 type: feat
-status: active
+status: completed
 date: 2026-03-29
 ---
 

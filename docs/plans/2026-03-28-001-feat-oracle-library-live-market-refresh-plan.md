@@ -1,7 +1,7 @@
 ---
 title: "feat: Oracle Library Extraction + Live Market Page SWR Refresh"
 type: feat
-status: active
+status: completed
 date: 2026-03-28
 origin: docs/brainstorms/2026-03-28-oracle-and-live-market-page-requirements.md
 ---

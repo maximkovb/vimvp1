@@ -1,7 +1,7 @@
 ---
 title: "feat: Dashboard — portfolio P&L, leaderboard win rate, history page"
 type: feat
-status: active
+status: completed
 date: 2026-03-29
 ---
 

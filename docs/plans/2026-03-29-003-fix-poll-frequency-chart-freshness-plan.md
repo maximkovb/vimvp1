@@ -1,7 +1,7 @@
 ---
 title: "fix: Poll frequency — view trajectory chart staleness"
 type: fix
-status: active
+status: completed
 date: 2026-03-29
 origin: docs/brainstorms/2026-03-29-poll-frequency-view-trajectory-requirements.md
 ---
