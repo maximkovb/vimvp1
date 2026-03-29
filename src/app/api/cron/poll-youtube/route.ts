@@ -17,10 +17,9 @@ interface YouTubeVideoListResponse {
 }
 
 /**
- * Adaptive polling tiers based on time until resolution:
- * - <1h:  poll every 5 minutes
- * - 1-24h: poll every 30 minutes
- * - >24h: poll every 2 hours
+ * Returns true if the market is due for a new poll.
+ * All active and halted markets poll every 5 minutes regardless of time until
+ * resolution, so the view trajectory chart never shows data older than ~10 minutes.
  */
 function shouldPoll(
   market: { resolvesAt: Date | null; status: string },
@@ -28,21 +27,8 @@ function shouldPoll(
 ): boolean {
   if (!market.resolvesAt) return false;
   if (market.status !== "active" && market.status !== "halted") return false;
-
-  const now = Date.now();
-  const msUntilResolve = market.resolvesAt.getTime() - now;
-
-  let intervalMs: number;
-  if (msUntilResolve < 60 * 60 * 1000) {
-    intervalMs = 5 * 60 * 1000; // 5 min
-  } else if (msUntilResolve < 24 * 60 * 60 * 1000) {
-    intervalMs = 30 * 60 * 1000; // 30 min
-  } else {
-    intervalMs = 2 * 60 * 60 * 1000; // 2 hours
-  }
-
   if (!lastPollAt) return true;
-  return now - lastPollAt.getTime() >= intervalMs;
+  return Date.now() - lastPollAt.getTime() >= 5 * 60 * 1000;
 }
 
 export async function GET(request: Request) {
