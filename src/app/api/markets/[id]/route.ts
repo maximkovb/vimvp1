@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
-import { markets, priceSnapshots, trades } from "@/db/schema";
+import { markets, priceSnapshots, trades, youtubePolls } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { allPrices } from "@/lib/lmsr";
 
@@ -28,7 +28,7 @@ export async function GET(
   const b = parseFloat(market.bParameter);
   const [priceYes, priceNo] = allPrices(quantities, b);
 
-  const [history, recentTrades] = await Promise.all([
+  const [history, recentTrades, polls] = await Promise.all([
     db
       .select({
         time: priceSnapshots.recordedAt,
@@ -46,6 +46,16 @@ export async function GET(
       .where(eq(trades.marketId, id))
       .orderBy(desc(trades.createdAt))
       .limit(20),
+    db
+      .select({
+        polledAt: youtubePolls.polledAt,
+        viewCount: youtubePolls.viewCount,
+        likeCount: youtubePolls.likeCount,
+      })
+      .from(youtubePolls)
+      .where(eq(youtubePolls.marketId, id))
+      .orderBy(youtubePolls.polledAt)
+      .limit(500),
   ]);
 
   return NextResponse.json({
@@ -76,6 +86,11 @@ export async function GET(
       priceBefore: parseFloat(t.priceBefore),
       priceAfter: parseFloat(t.priceAfter),
       createdAt: t.createdAt,
+    })),
+    pollHistory: polls.map((p) => ({
+      time: p.polledAt.toISOString(),
+      viewCount: p.viewCount !== null ? Number(p.viewCount) : null,
+      likeCount: p.likeCount !== null ? Number(p.likeCount) : null,
     })),
   });
 }

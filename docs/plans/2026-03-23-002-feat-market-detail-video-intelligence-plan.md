@@ -1,7 +1,7 @@
 ---
 title: "feat: Add Video Intelligence Panel to Market Detail"
 type: feat
-status: active
+status: completed
 date: 2026-03-23
 origin: docs/brainstorms/2026-03-23-market-detail-video-intelligence-requirements.md
 ---

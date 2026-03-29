@@ -1,7 +1,7 @@
 ---
 title: "fix: Auto-Fill Contract Calibration — Harder Thresholds & Varied Resolution Windows"
 type: fix
-status: active
+status: completed
 date: 2026-03-23
 origin: docs/brainstorms/2026-03-23-autofill-contract-calibration-fix-requirements.md
 ---

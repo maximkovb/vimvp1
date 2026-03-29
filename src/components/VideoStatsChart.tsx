@@ -4,21 +4,17 @@ import { useEffect, useRef } from "react";
 import {
   createChart,
   type IChartApi,
+  type UTCTimestamp,
   ColorType,
   AreaSeries,
   LineStyle,
 } from "lightweight-charts";
+import { formatCount } from "@/lib/format";
 
 interface VideoStatsChartProps {
-  data: { time: number; value: number }[];
+  data: { time: UTCTimestamp; value: number }[];
   milestone: number;
   metricLabel: "views" | "likes";
-}
-
-function formatCount(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
 }
 
 export function VideoStatsChart({
@@ -64,7 +60,7 @@ export function VideoStatsChart({
     });
 
     if (data.length > 0) {
-      series.setData(data as never);
+      series.setData(data);
       chart.timeScale().fitContent();
     }
 
@@ -79,18 +75,13 @@ export function VideoStatsChart({
 
     chartRef.current = chart;
 
-    const handleResize = () => {
-      if (chartContainerRef.current) {
-        chart.applyOptions({
-          width: chartContainerRef.current.clientWidth,
-        });
-      }
-    };
-
-    window.addEventListener("resize", handleResize);
+    const observer = new ResizeObserver((entries) => {
+      chart.applyOptions({ width: entries[0].contentRect.width });
+    });
+    observer.observe(chartContainerRef.current);
 
     return () => {
-      window.removeEventListener("resize", handleResize);
+      observer.disconnect();
       chart.remove();
     };
   }, [data, milestone, metricLabel]);

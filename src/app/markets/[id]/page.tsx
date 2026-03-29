@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { markets, trades, priceSnapshots, youtubePolls } from "@/db/schema";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and, isNotNull } from "drizzle-orm";
+import type { UTCTimestamp } from "lightweight-charts";
 import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { price, allPrices } from "@/lib/lmsr";
@@ -53,27 +54,30 @@ export default async function MarketPage({
     .limit(500);
 
   const chartData = history.map((s) => ({
-    time: Math.floor(s.recordedAt.getTime() / 1000),
+    time: Math.floor(s.recordedAt.getTime() / 1000) as UTCTimestamp,
     value: parseFloat(s.priceYes),
   }));
 
-  // Fetch poll history for video stats trajectory chart
+  // Fetch poll history for video stats trajectory chart — filter nulls in SQL
   const pollHistory = await db
     .select()
     .from(youtubePolls)
-    .where(eq(youtubePolls.marketId, id))
+    .where(
+      and(
+        eq(youtubePolls.marketId, id),
+        market.questionType === "views"
+          ? isNotNull(youtubePolls.viewCount)
+          : isNotNull(youtubePolls.likeCount)
+      )
+    )
     .orderBy(youtubePolls.polledAt)
     .limit(500);
 
-  // Build chart data — skip null rows (deleted/private video), convert BigInt to number
-  const statsChartData = pollHistory
-    .filter((p) =>
-      market.questionType === "views" ? p.viewCount !== null : p.likeCount !== null
-    )
-    .map((p) => ({
-      time: Math.floor(p.polledAt.getTime() / 1000),
-      value: Number(market.questionType === "views" ? p.viewCount! : p.likeCount!),
-    }));
+  // Convert BigInt to number for client component serialization
+  const statsChartData = pollHistory.map((p) => ({
+    time: Math.floor(p.polledAt.getTime() / 1000) as UTCTimestamp,
+    value: Number(market.questionType === "views" ? p.viewCount : p.likeCount),
+  }));
 
   const milestoneNumber = Number(market.milestoneThreshold);
 

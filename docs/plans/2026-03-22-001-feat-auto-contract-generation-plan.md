@@ -1,7 +1,7 @@
 ---
 title: "feat: Auto-generate risk-tiered contract terms on market creation"
 type: feat
-status: active
+status: completed
 date: 2026-03-22
 origin: docs/brainstorms/2026-03-22-auto-contract-generation-requirements.md
 ---

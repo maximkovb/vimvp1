@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { createChart, type IChartApi, ColorType, AreaSeries } from "lightweight-charts";
+import { createChart, type IChartApi, type UTCTimestamp, ColorType, AreaSeries } from "lightweight-charts";
 
 interface PriceChartProps {
-  data: { time: number; value: number }[];
+  data: { time: UTCTimestamp; value: number }[];
 }
 
 export function PriceChart({ data }: PriceChartProps) {
@@ -45,7 +45,7 @@ export function PriceChart({ data }: PriceChartProps) {
       },
     });
 
-    series.setData(data as never);
+    series.setData(data);
     chart.timeScale().fitContent();
     chartRef.current = chart;
 
