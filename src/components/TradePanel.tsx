@@ -1,16 +1,15 @@
 "use client";
 
 import { useState, useTransition, useRef } from "react";
-import { useRouter } from "next/navigation";
 import { buyShares, previewTrade, type TradePreview } from "@/lib/actions/trade";
 
 interface TradePanelProps {
   marketId: string;
   prices: number[];
+  onTradeSuccess?: () => void;
 }
 
-export function TradePanel({ marketId, prices }: TradePanelProps) {
-  const router = useRouter();
+export function TradePanel({ marketId, prices, onTradeSuccess }: TradePanelProps) {
   const [outcome, setOutcome] = useState<number>(0); // 0=YES, 1=NO
   const [amount, setAmount] = useState("");
   const [preview, setPreview] = useState<TradePreview | null>(null);
@@ -68,7 +67,7 @@ export function TradePanel({ marketId, prices }: TradePanelProps) {
         setAmount("");
         setPreview(null);
         setError("");
-        router.refresh();
+        onTradeSuccess?.();
       }
     });
   }
