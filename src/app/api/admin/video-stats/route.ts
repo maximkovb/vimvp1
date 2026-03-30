@@ -1,18 +1,22 @@
 import { NextResponse } from "next/server";
 import { verifyCronAuth } from "@/lib/cron-auth";
-import { YOUTUBE_API_BASE, YT_TIMEOUT_MS } from "@/lib/constants";
+import { YOUTUBE_API_BASE, YT_TIMEOUT_MS, TIKTOK_THUMBNAIL_RE } from "@/lib/constants";
 import { extractVideoId } from "@/lib/youtube";
+import { isTikTokUrl, extractTikTokVideoId, fetchTikTokStatsById } from "@/lib/tiktok";
 
 /**
- * GET /api/admin/video-stats?url=<youtubeUrl>
+ * GET /api/admin/video-stats?url=<videoUrl>
  *
  * Bearer-token authenticated equivalent of the fetchVideoStats() server action.
+ * Supports both YouTube and TikTok URLs.
  * Use this when calling from an agent or cron job (no browser session available).
  *
  * Auth: Authorization: Bearer <CRON_SECRET>
  *
- * Response: { videoId, title, thumbnail, channelTitle, channelId, description,
- *             viewCount, likeCount, publishedAt, categoryId? }
+ * YouTube response: { platform, videoId, title, thumbnail, channelTitle, channelId,
+ *                     description, viewCount, likeCount, publishedAt, categoryId? }
+ * TikTok response:  { platform, videoId, tikapiPostId, title, thumbnail, channelTitle,
+ *                     creatorId, viewCount, likeCount, publishedAt }
  */
 export async function GET(request: Request) {
   const authError = verifyCronAuth(request);
@@ -24,6 +28,43 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "url query parameter required" }, { status: 400 });
   }
 
+  // ── TikTok path ────────────────────────────────────────────────────────────
+  if (isTikTokUrl(url)) {
+    const videoId = extractTikTokVideoId(url);
+    if (!videoId) {
+      return NextResponse.json(
+        { error: "Invalid TikTok URL — use https://www.tiktok.com/@user/video/<id>" },
+        { status: 400 }
+      );
+    }
+
+    let stats;
+    try {
+      stats = await fetchTikTokStatsById(videoId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "TikTok API error";
+      return NextResponse.json({ error: msg }, { status: 502 });
+    }
+
+    if (!stats) {
+      return NextResponse.json({ error: "Video not found or is private" }, { status: 404 });
+    }
+
+    return NextResponse.json({
+      platform: "tiktok",
+      videoId,
+      tikapiPostId: stats.tikapiPostId,
+      title: `@${stats.creatorId}`,
+      thumbnail: TIKTOK_THUMBNAIL_RE.test(stats.thumbnailUrl) ? stats.thumbnailUrl : "",
+      channelTitle: stats.creatorName,
+      creatorId: stats.creatorId,
+      viewCount: stats.viewCount,
+      likeCount: stats.likeCount,
+      publishedAt: stats.createdAt,
+    });
+  }
+
+  // ── YouTube path ───────────────────────────────────────────────────────────
   const videoId = extractVideoId(url);
   if (!videoId) {
     return NextResponse.json({ error: "Invalid YouTube URL" }, { status: 400 });
@@ -56,6 +97,7 @@ export async function GET(request: Request) {
   const thumbnails = item.snippet.thumbnails;
 
   return NextResponse.json({
+    platform: "youtube",
     videoId,
     title: item.snippet.title,
     thumbnail: thumbnails?.medium?.url ?? thumbnails?.default?.url ?? "",

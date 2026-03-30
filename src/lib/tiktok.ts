@@ -1,11 +1,4 @@
-import TikAPI from "tikapi";
-
-/** TikAPI client — initialized lazily so missing key only throws at call time. */
-function getClient() {
-  const key = process.env.TIKAPI_KEY;
-  if (!key) throw new Error("TIKAPI_KEY not configured");
-  return TikAPI(key);
-}
+import { TIKTOK_VIDEO_ID_RE } from "@/lib/constants";
 
 export interface TikTokStats {
   viewCount: number;
@@ -31,7 +24,7 @@ export function extractTikTokVideoId(input: string): string | null {
   const trimmed = input.trim();
 
   // Bare numeric ID (15–20 digits)
-  if (/^\d{15,20}$/.test(trimmed)) return trimmed;
+  if (TIKTOK_VIDEO_ID_RE.test(trimmed)) return trimmed;
 
   // Full URL: tiktok.com/@user/video/<id>
   const longMatch = trimmed.match(/tiktok\.com\/@[^/]+\/video\/(\d{15,20})/);
@@ -41,36 +34,41 @@ export function extractTikTokVideoId(input: string): string | null {
 }
 
 /**
- * Returns true if the URL is a TikTok URL.
+ * Returns true if the URL hostname is tiktok.com or a subdomain.
+ * Uses URL parsing to avoid matching "tiktok.com" appearing elsewhere in the string.
  */
 export function isTikTokUrl(url: string): boolean {
-  return /tiktok\.com/i.test(url);
+  try {
+    const { hostname } = new URL(url);
+    return hostname === "tiktok.com" || hostname.endsWith(".tiktok.com");
+  } catch {
+    return false;
+  }
 }
 
 /**
- * Fetches video stats by TikTok video ID.
+ * Fetches video stats by TikTok video ID via TikWM (free, no API key).
  * Returns null if the video is deleted or private.
- * Throws on API errors (rate limit, auth failure, network).
+ * Throws on network errors or unexpected HTTP responses.
  */
 export async function fetchTikTokStatsById(
   videoId: string
 ): Promise<TikTokStats | null> {
-  const api = getClient();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const response = await (api.public as any).post({ id: videoId });
-
-  const item = response?.data?.itemInfo?.itemStruct;
-  if (!item) return null; // deleted or private
-
+  const url = `https://www.tikwm.com/api/?url=https://www.tiktok.com/@_/video/${videoId}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(8_000) });
+  if (!res.ok) throw new Error(`TikWM HTTP ${res.status}`);
+  const json = await res.json();
+  if (json?.code !== 0 || !json?.data) return null; // deleted, private, or API error
+  const d = json.data;
   return {
-    viewCount: item.stats?.playCount ?? 0,
-    likeCount: item.stats?.diggCount ?? 0,
-    commentCount: item.stats?.commentCount ?? 0,
-    shareCount: item.stats?.shareCount ?? 0,
-    createdAt: new Date((item.createTime ?? 0) * 1000).toISOString(),
-    creatorName: item.author?.nickname ?? "",
-    creatorId: item.author?.uniqueId ?? "",
-    thumbnailUrl: item.video?.cover ?? "",
-    tikapiPostId: item.id ?? videoId,
+    viewCount:    d.play_count    ?? 0,
+    likeCount:    d.digg_count    ?? 0,
+    commentCount: d.comment_count ?? 0,
+    shareCount:   d.share_count   ?? 0,
+    createdAt:    new Date((d.create_time ?? 0) * 1000).toISOString(),
+    creatorName:  d.author?.nickname  ?? "",
+    creatorId:    d.author?.unique_id ?? "",
+    thumbnailUrl: d.cover ?? "",
+    tikapiPostId: d.id ?? videoId,
   };
 }
