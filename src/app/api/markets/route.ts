@@ -9,7 +9,8 @@ import { computeExpectedOutcome, RESOLUTION_HOURS } from "@/lib/calibration";
 import { z } from "zod";
 
 const CreateMarketSchema = z.object({
-  youtubeVideoId: z.string().regex(/^[a-zA-Z0-9_-]{11}$/),
+  videoId: z.string().min(1).max(50),
+  platform: z.enum(["youtube", "tiktok", "instagram"]).default("youtube"),
   title: z.string().min(1).max(200),
   description: z.string().max(500).optional(),
   questionType: z.enum(["views", "likes"]),
@@ -32,11 +33,13 @@ const CreateMarketSchema = z.object({
     title: z.string(),
     thumbnail: z.string()
       .regex(/^https:\/\/i\.ytimg\.com\//)
+      .or(z.string().regex(/^https:\/\/[a-z0-9-]+\.tiktokcdn\.com\//))
       .or(z.literal(""))
       .default(""),
     channelTitle: z.string(),
     channelId: z.string().optional(),
     description: z.string().max(5000).optional(),
+    creatorId: z.string().optional(),
   }),
 });
 
@@ -96,7 +99,8 @@ export async function POST(request: Request) {
   await db.transaction(async (tx) => {
     await tx.insert(markets).values({
       id: marketId,
-      youtubeVideoId: data.youtubeVideoId,
+      videoId: data.videoId,
+      platform: data.platform,
       title: data.title,
       description: data.description ?? null,
       questionType: data.questionType,

@@ -1,5 +1,6 @@
 import {
   pgTable,
+  pgEnum,
   text,
   timestamp,
   integer,
@@ -10,6 +11,8 @@ import {
   index,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+
+export const platformEnum = pgEnum("platform", ["youtube", "tiktok", "instagram"]);
 
 // ─── Users ──────────────────────────────────────────────────────────────────────
 
@@ -90,7 +93,9 @@ export const markets = pgTable(
   "markets",
   {
     id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
-    youtubeVideoId: text("youtube_video_id").notNull(),
+    videoId: text("video_id").notNull(),
+    platform: platformEnum("platform").default("youtube").notNull(),
+    tikapiPostId: text("tikapi_post_id"),
     title: text("title").notNull(),
     description: text("description"),
     questionType: text("question_type").$type<QuestionType>().notNull(),
@@ -107,6 +112,7 @@ export const markets = pgTable(
       channelTitle: string;
       channelId?: string;
       description?: string;
+      creatorId?: string;
     }>(),
     opensAt: timestamp("opens_at", { mode: "date" }),
     haltsAt: timestamp("halts_at", { mode: "date" }),
@@ -126,6 +132,7 @@ export const marketsRelations = relations(markets, ({ many }) => ({
   trades: many(trades),
   priceSnapshots: many(priceSnapshots),
   youtubePolls: many(youtubePolls),
+  tiktokPolls: many(tiktokPolls),
 }));
 
 // ─── Positions ──────────────────────────────────────────────────────────────────
@@ -224,6 +231,29 @@ export const youtubePolls = pgTable(
 
 export const youtubePollsRelations = relations(youtubePolls, ({ one }) => ({
   market: one(markets, { fields: [youtubePolls.marketId], references: [markets.id] }),
+}));
+
+// ─── TikTok Polls ────────────────────────────────────────────────────────────────
+
+export const tiktokPolls = pgTable(
+  "tiktok_polls",
+  {
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    marketId: text("market_id").notNull().references(() => markets.id),
+    viewCount: bigint("view_count", { mode: "bigint" }),
+    likeCount: bigint("like_count", { mode: "bigint" }),
+    commentCount: bigint("comment_count", { mode: "bigint" }),
+    shareCount: bigint("share_count", { mode: "bigint" }),
+    polledAt: timestamp("polled_at", { mode: "date" }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("tiktok_polls_market_id_idx").on(table.marketId),
+    index("tiktok_polls_market_polled_idx").on(table.marketId, table.polledAt),
+  ]
+);
+
+export const tiktokPollsRelations = relations(tiktokPolls, ({ one }) => ({
+  market: one(markets, { fields: [tiktokPolls.marketId], references: [markets.id] }),
 }));
 
 // ─── Coin Transactions (ledger) ─────────────────────────────────────────────────

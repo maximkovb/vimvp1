@@ -5,6 +5,9 @@ const nextConfig: NextConfig = {
     remotePatterns: [
       { protocol: "https", hostname: "i.ytimg.com" },
       { protocol: "https", hostname: "img.youtube.com" },
+      { protocol: "https", hostname: "*.tiktokcdn.com" },
+      { protocol: "https", hostname: "p16-sign.tiktokcdn.com" },
+      { protocol: "https", hostname: "p77-sign.tiktokcdn.com" },
     ],
   },
   async headers() {
@@ -22,8 +25,8 @@ const nextConfig: NextConfig = {
               "default-src 'self'",
               "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
               "style-src 'self' 'unsafe-inline'",
-              "img-src 'self' https://i.ytimg.com https://img.youtube.com data: blob:",
-              "frame-src https://www.youtube.com",
+              "img-src 'self' https://i.ytimg.com https://img.youtube.com https://*.tiktokcdn.com data: blob:",
+              "frame-src https://www.youtube.com https://www.tiktok.com",
               "connect-src 'self'",
               "font-src 'self' data:",
             ].join("; "),
