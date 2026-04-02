@@ -1,13 +1,17 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { markets, tiktokPolls } from "@/db/schema";
-import { or, eq, and, sql } from "drizzle-orm";
+import { and, or, eq, sql } from "drizzle-orm";
 import { verifyCronAuth } from "@/lib/cron-auth";
 import { fetchTikTokStatsById } from "@/lib/tiktok";
+import { TIKTOK_THUMBNAIL_RE } from "@/lib/constants";
+import { resolveMarket } from "@/lib/oracle";
+
+export const maxDuration = 60;
 
 /**
  * Returns true if the market is due for a new TikTok poll.
- * Polls every 15 minutes for all active and halted TikTok markets.
+ * Polls every 10 minutes for all active and halted TikTok markets.
  */
 function shouldPoll(
   market: { resolvesAt: Date | null; status: string },
@@ -16,31 +20,18 @@ function shouldPoll(
   if (!market.resolvesAt) return false;
   if (market.status !== "active" && market.status !== "halted") return false;
   if (!lastPollAt) return true;
-  return Date.now() - lastPollAt.getTime() >= 15 * 60 * 1000;
+  return Date.now() - lastPollAt.getTime() >= 10 * 60 * 1000;
 }
 
 export async function GET(request: Request) {
   const authError = verifyCronAuth(request);
   if (authError) return authError;
 
-  const tikapiKey = process.env.TIKAPI_KEY;
-  if (!tikapiKey) {
-    return NextResponse.json(
-      { error: "TIKAPI_KEY not configured" },
-      { status: 500 }
-    );
-  }
-
   // Fetch active and halted TikTok markets only
   const activeMarkets = await db
     .select()
     .from(markets)
-    .where(
-      and(
-        eq(markets.platform, "tiktok"),
-        or(eq(markets.status, "active"), eq(markets.status, "halted"))
-      )
-    );
+    .where(or(eq(markets.status, "active"), eq(markets.status, "halted")));
 
   if (activeMarkets.length === 0) {
     return NextResponse.json({ polled: 0 });
@@ -69,7 +60,9 @@ export async function GET(request: Request) {
   }
 
   let polledCount = 0;
+  let earlyResolvedCount = 0;
   const errors: string[] = [];
+  const resolveErrors: string[] = [];
 
   for (const market of marketsToPoll) {
     try {
@@ -79,12 +72,11 @@ export async function GET(request: Request) {
         marketId: market.id,
         viewCount: stats !== null ? BigInt(stats.viewCount) : null,
         likeCount: stats !== null ? BigInt(stats.likeCount) : null,
-        commentCount: stats !== null ? BigInt(stats.commentCount) : null,
-        shareCount: stats !== null ? BigInt(stats.shareCount) : null,
       });
 
-      // Update videoMetadata thumbnail if TikTok CDN URL changed (signed URLs rotate)
-      if (stats?.thumbnailUrl) {
+      // Update videoMetadata thumbnail if TikTok CDN URL changed (signed URLs rotate).
+      // Only persist URLs from the known TikTok CDN domain to prevent injection.
+      if (stats?.thumbnailUrl && TIKTOK_THUMBNAIL_RE.test(stats.thumbnailUrl)) {
         await db
           .update(markets)
           .set({
@@ -94,6 +86,39 @@ export async function GET(request: Request) {
             },
           })
           .where(eq(markets.id, market.id));
+      }
+
+      // Auto-resolve if milestone crossed
+      if (stats !== null) {
+        const metric =
+          market.questionType === "views"
+            ? BigInt(stats.viewCount)
+            : BigInt(stats.likeCount);
+
+        if (metric >= market.milestoneThreshold) {
+          try {
+            // Only proceed if the status transition succeeds (guards against already-resolved markets)
+            const transitioned = await db
+              .update(markets)
+              .set({ status: "resolving" })
+              .where(
+                and(
+                  eq(markets.id, market.id),
+                  or(eq(markets.status, "active"), eq(markets.status, "halted"))
+                )
+              )
+              .returning({ id: markets.id });
+
+            if (transitioned.length > 0) {
+              await resolveMarket(market.id);
+              earlyResolvedCount++;
+            }
+          } catch (resolveErr) {
+            const msg = resolveErr instanceof Error ? resolveErr.message : String(resolveErr);
+            console.error(`Early resolve failed for market ${market.id}:`, msg);
+            resolveErrors.push(`${market.id}: ${msg}`);
+          }
+        }
       }
 
       polledCount++;
@@ -111,6 +136,8 @@ export async function GET(request: Request) {
   return NextResponse.json({
     polled: polledCount,
     skipped: activeMarkets.length - marketsToPoll.length,
+    earlyResolved: earlyResolvedCount > 0 ? earlyResolvedCount : undefined,
     errors: errors.length > 0 ? errors : undefined,
+    resolveErrors: resolveErrors.length > 0 ? resolveErrors : undefined,
   });
 }
