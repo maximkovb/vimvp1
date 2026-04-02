@@ -97,16 +97,19 @@ export async function GET(request: Request) {
 
         if (metric >= market.milestoneThreshold) {
           try {
-            // Only proceed if the status transition succeeds (guards against already-resolved markets)
+            // Halt trading first (active → halted) to close the trade window before resolving.
+            // No-op if the market is already halted.
+            await db
+              .update(markets)
+              .set({ status: "halted" })
+              .where(and(eq(markets.id, market.id), eq(markets.status, "active")));
+
+            // Transition to resolving. Only proceeds if market is halted (i.e., we just halted
+            // it above, or it was already halted). Guards against double-resolution.
             const transitioned = await db
               .update(markets)
               .set({ status: "resolving" })
-              .where(
-                and(
-                  eq(markets.id, market.id),
-                  or(eq(markets.status, "active"), eq(markets.status, "halted"))
-                )
-              )
+              .where(and(eq(markets.id, market.id), eq(markets.status, "halted")))
               .returning({ id: markets.id });
 
             if (transitioned.length > 0) {
