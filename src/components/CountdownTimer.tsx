@@ -19,7 +19,16 @@ function formatTimeRemaining(ms: number): string {
   return `${minutes}m ${seconds}s`;
 }
 
-export function CountdownTimer({ target }: { target: Date }) {
+interface CountdownTimerProps {
+  target: Date;
+  /**
+   * "default" — standard muted/red-near-end styling
+   * "urgent"  — always amber/bold, used for halted/resolving markets
+   */
+  variant?: "default" | "urgent";
+}
+
+export function CountdownTimer({ target, variant = "default" }: CountdownTimerProps) {
   const [remaining, setRemaining] = useState(
     target.getTime() - Date.now()
   );
@@ -33,10 +42,13 @@ export function CountdownTimer({ target }: { target: Date }) {
 
   const isUrgent = remaining > 0 && remaining < 1000 * 60 * 60; // < 1 hour
 
+  const className =
+    variant === "urgent"
+      ? "text-sm text-amber-500 font-bold"
+      : `text-sm ${isUrgent ? "text-red font-medium" : "text-muted"}`;
+
   return (
-    <span
-      className={`text-sm ${isUrgent ? "text-red font-medium" : "text-muted"}`}
-    >
+    <span className={className}>
       {remaining > 0 ? `${formatTimeRemaining(remaining)} remaining` : "Ended"}
     </span>
   );

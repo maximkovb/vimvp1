@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
+import { TIKTOK_THUMBNAIL_RE } from "@/lib/constants";
 import { MarketStatusBadge } from "./MarketStatusBadge";
 import { CountdownTimer } from "./CountdownTimer";
 import type { MarketStatus, QuestionType } from "@/db/schema";
@@ -38,8 +39,8 @@ export function MarketCard({
       href={`/markets/${id}`}
       className="block bg-card border border-border rounded-xl overflow-hidden hover:border-accent/50 transition-colors group"
     >
-      {/* Thumbnail */}
-      {videoMetadata?.thumbnail && (
+      {/* Thumbnail — only render TikTok CDN URLs; legacy YouTube thumbnails are skipped */}
+      {videoMetadata?.thumbnail && TIKTOK_THUMBNAIL_RE.test(videoMetadata.thumbnail) && (
         <div className="relative aspect-video bg-background overflow-hidden">
           <Image
             src={videoMetadata.thumbnail}
@@ -54,9 +55,15 @@ export function MarketCard({
       <div className="p-4">
         {/* Status + countdown */}
         <div className="flex items-center justify-between mb-2">
-          <MarketStatusBadge status={status} />
+          <MarketStatusBadge
+            status={status}
+            pulsing={status === "halted" || status === "resolving"}
+          />
           {resolvesAt && status !== "resolved" && status !== "cancelled" && (
-            <CountdownTimer target={resolvesAt} />
+            <CountdownTimer
+              target={resolvesAt}
+              variant={status === "halted" || status === "resolving" ? "urgent" : "default"}
+            />
           )}
           {status === "resolved" && (
             <span

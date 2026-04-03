@@ -3,10 +3,17 @@
 import { useState, useTransition, useRef } from "react";
 import { buyShares, previewTrade, type TradePreview } from "@/lib/actions/trade";
 
+export interface TradeResult {
+  outcome: number; // 0=YES, 1=NO
+  cost: number;
+  shares: number;
+  priceAfter: number;
+}
+
 interface TradePanelProps {
   marketId: string;
   prices: number[];
-  onTradeSuccess?: () => void;
+  onTradeSuccess?: (result: TradeResult) => void;
 }
 
 export function TradePanel({ marketId, prices, onTradeSuccess }: TradePanelProps) {
@@ -64,10 +71,17 @@ export function TradePanel({ marketId, prices, onTradeSuccess }: TradePanelProps
       if ("error" in result) {
         setError(result.error);
       } else {
+        // Capture priceAfter from the preview if available, otherwise use current price
+        const priceAfter = preview?.newPrice ?? prices[outcome] ?? 0;
         setAmount("");
         setPreview(null);
         setError("");
-        onTradeSuccess?.();
+        onTradeSuccess?.({
+          outcome,
+          cost: result.cost,
+          shares: result.shares,
+          priceAfter,
+        });
       }
     });
   }

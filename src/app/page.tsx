@@ -5,6 +5,7 @@ import { auth } from "@/lib/auth";
 import { getMarketPrices } from "@/lib/market-utils";
 import Link from "next/link";
 import { MarketCard } from "@/components/MarketCard";
+import { ResolvingRailCard } from "@/components/ResolvingRailCard";
 
 function MarketGrid({ items }: { items: (typeof markets.$inferSelect)[] }) {
   return (
@@ -56,16 +57,22 @@ export default async function HomePage() {
       .limit(6),
   ]);
 
+  // Split active markets: "Resolving Soon" rail vs main active grid
+  const resolvingSoon = activeMarkets.filter(
+    (m) => m.status === "halted" || m.status === "resolving"
+  );
+  const mainMarkets = activeMarkets.filter((m) => m.status === "active");
+
   const hasMarkets = activeMarkets.length > 0 || resolvedMarkets.length > 0;
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-12">
       <div className="text-center mb-12">
         <h1 className="text-4xl sm:text-5xl font-bold mb-4">
-          Predict YouTube&apos;s <span className="text-accent">Next Hit</span>
+          Predict TikTok&apos;s <span className="text-accent">Next Hit</span>
         </h1>
         <p className="text-lg text-muted max-w-2xl mx-auto">
-          Bet virtual currency on whether YouTube videos will hit view and
+          Bet virtual currency on whether TikTok videos will hit view and
           engagement milestones. Trade against other predictors and climb the
           leaderboard.
         </p>
@@ -79,10 +86,35 @@ export default async function HomePage() {
         )}
       </div>
 
-      {activeMarkets.length > 0 && (
+      {/* Resolving Soon rail — hidden when no markets are halted/resolving */}
+      {resolvingSoon.length > 0 && (
+        <section className="mb-10">
+          <div className="flex items-center gap-2 mb-4">
+            <span className="inline-block w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+            <h2 className="text-lg font-semibold text-amber-500">Resolving Soon</h2>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {resolvingSoon.map((market) => {
+              const prices = getMarketPrices(market);
+              return (
+                <ResolvingRailCard
+                  key={market.id}
+                  id={market.id}
+                  title={market.title}
+                  priceYes={prices[0]}
+                  priceNo={prices[1]}
+                  resolvesAt={market.resolvesAt!}
+                />
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {mainMarkets.length > 0 && (
         <section className="mb-12">
           <h2 className="text-lg font-semibold mb-4">Active Markets</h2>
-          <MarketGrid items={activeMarkets} />
+          <MarketGrid items={mainMarkets} />
         </section>
       )}
 

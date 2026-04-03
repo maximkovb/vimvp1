@@ -5,12 +5,22 @@ import { useState, useEffect, useRef } from "react";
 import type { UTCTimestamp } from "lightweight-charts";
 import type { Session } from "next-auth";
 import type { MarketData } from "@/types/market";
+import type { UserPosition } from "@/lib/actions/trade";
+import { getUserPosition } from "@/lib/actions/trade";
 import { TradePanel } from "@/components/TradePanel";
+import type { TradeResult } from "@/components/TradePanel";
 import { PriceChart } from "@/components/PriceChart";
 import { VideoStatsChart } from "@/components/VideoStatsChart";
 import { MarketStatusBadge } from "@/components/MarketStatusBadge";
 import { CountdownTimer } from "@/components/CountdownTimer";
 import { LastUpdated } from "@/components/LastUpdated";
+import { HaltCountdownBlock } from "@/components/HaltCountdownBlock";
+import { ResolutionReveal } from "@/components/ResolutionReveal";
+import { PostTradeShareCard } from "@/components/PostTradeShareCard";
+import type { PostTradeResult } from "@/components/PostTradeShareCard";
+import { ResolutionShareCard } from "@/components/ResolutionShareCard";
+import { Toast } from "@/components/Toast";
+import { useToast } from "@/hooks/useToast";
 import { marketFetcher } from "@/lib/market-fetcher";
 
 interface MarketLiveDataProps {
@@ -27,10 +37,18 @@ export function MarketLiveData({
   children,
 }: MarketLiveDataProps) {
   const { mutate: globalMutate } = useSWRConfig();
+
   const { data, mutate, isValidating } = useSWR<MarketData>(
     `/api/markets/${marketId}`,
     marketFetcher,
-    { refreshInterval: 60_000, fallbackData: initialData }
+    {
+      // Adaptive polling: SWR re-evaluates the function each time data arrives
+      refreshInterval: (latestData) => {
+        const status = latestData?.status ?? initialData.status;
+        return status === "halted" || status === "resolving" ? 10_000 : 60_000;
+      },
+      fallbackData: initialData,
+    }
   );
 
   // Track when data was last successfully fetched
@@ -38,7 +56,7 @@ export function MarketLiveData({
   const prevValidating = useRef(false);
   useEffect(() => {
     if (prevValidating.current && !isValidating) {
-      setLastFetched(new Date());
+      setLastFetched(new Date()); // intentional: update timestamp after revalidation completes
     }
     prevValidating.current = isValidating;
   }, [isValidating]);
@@ -46,6 +64,72 @@ export function MarketLiveData({
   // data is always defined because fallbackData is provided
   const market = data!;
 
+  // Derived: is market in an urgent status?
+  const isUrgentStatus = market.status === "halted" || market.status === "resolving";
+
+  // ── Toast on halt transition ──────────────────────────────────────────────────
+  const prevStatusRef = useRef<string>(initialData.status);
+  const toast = useToast();
+
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    const current = market.status;
+    prevStatusRef.current = current;
+
+    if (prev === "active" && (current === "halted" || current === "resolving")) {
+      const target = market.resolvesAt ? new Date(market.resolvesAt) : null;
+      const remaining = target ? target.getTime() - Date.now() : 0;
+      const mins = Math.floor(remaining / 60_000);
+      const secs = Math.floor((remaining % 60_000) / 1_000);
+      const timeLabel = `${mins}:${secs.toString().padStart(2, "0")}`;
+      toast.trigger(`Trading locked — resolves in ${timeLabel}`);
+    }
+  }, [market.status, market.resolvesAt, toast]);
+
+  // ── User position fetch on resolution ────────────────────────────────────────
+  // undefined = not fetched yet, null = fetched but no position
+  const [userPosition, setUserPosition] = useState<UserPosition | null | undefined>(
+    undefined
+  );
+  const positionFetchedRef = useRef(false);
+
+  useEffect(() => {
+    if (
+      market.status === "resolved" &&
+      session?.user &&
+      !positionFetchedRef.current
+    ) {
+      positionFetchedRef.current = true;
+      getUserPosition(marketId)
+        .then((pos) => setUserPosition(pos))
+        .catch(() => setUserPosition(null)); // non-blocking — position panel stays hidden
+    }
+  }, [market.status, session?.user, marketId]);
+
+  // ── Post-trade share card state ───────────────────────────────────────────────
+  const [postTradeResult, setPostTradeResult] = useState<PostTradeResult | null>(null);
+
+  function handleTradeSuccess(result: TradeResult) {
+    mutate();
+    globalMutate("/api/balance");
+    setPostTradeResult({
+      outcome: result.outcome,
+      cost: result.cost,
+      shares: result.shares,
+      priceAfter: result.priceAfter,
+    });
+  }
+
+  // ── Resolution share card state ───────────────────────────────────────────────
+  const [showResolutionShare, setShowResolutionShare] = useState(false);
+
+  function handleRevealComplete() {
+    if (userPosition !== null && userPosition !== undefined) {
+      setShowResolutionShare(true);
+    }
+  }
+
+  // ── Derived values ────────────────────────────────────────────────────────────
   const resolvesAt = market.resolvesAt ? new Date(market.resolvesAt) : null;
   const milestoneNumber = Number(market.milestoneThreshold);
 
@@ -65,11 +149,38 @@ export function MarketLiveData({
 
   const prices = [market.priceYes, market.priceNo];
 
+  // Volume total from last price history entry
+  const volumeTotal =
+    market.priceHistory.length > 0
+      ? market.priceHistory[market.priceHistory.length - 1].volumeTotal
+      : 0;
+
   return (
     <>
+      {/* Toast — no third-party dependency, fires once per halt transition */}
+      <Toast show={toast.show} message={toast.message} onDismiss={toast.dismiss} />
+
+      {/* Resolution share card modal */}
+      {showResolutionShare && userPosition && market.outcome !== null && (
+        <ResolutionShareCard
+          marketTitle={market.title}
+          outcome={market.outcome}
+          userPosition={userPosition}
+          onDismiss={() => setShowResolutionShare(false)}
+        />
+      )}
+
       <div className="flex items-center gap-3 mb-4 mt-6">
-        <MarketStatusBadge status={market.status} />
-        {resolvesAt && <CountdownTimer target={resolvesAt} />}
+        <MarketStatusBadge
+          status={market.status}
+          pulsing={market.status === "halted" || market.status === "resolving"}
+        />
+        {resolvesAt && market.status !== "resolved" && market.status !== "cancelled" && (
+          <CountdownTimer
+            target={resolvesAt}
+            variant={isUrgentStatus ? "urgent" : "default"}
+          />
+        )}
         <div className="ml-auto">
           <LastUpdated updatedAt={lastFetched} />
         </div>
@@ -180,7 +291,7 @@ export function MarketLiveData({
           </div>
         </div>
 
-        {/* Right column: odds + trade panel */}
+        {/* Right column: odds + status-driven action slot */}
         <div className="lg:col-span-1">
           <div className="sticky top-20">
             {/* Current odds */}
@@ -202,43 +313,62 @@ export function MarketLiveData({
               </div>
             </div>
 
-            {/* Trade panel */}
-            {session?.user && market.status === "active" ? (
-              <TradePanel
-                marketId={market.id}
-                prices={prices}
-                onTradeSuccess={() => {
-                  mutate();
-                  globalMutate("/api/balance");
-                }}
-              />
-            ) : market.status === "resolved" ? (
-              <div className="bg-card border border-border rounded-xl p-4 text-center">
-                <div className="text-lg font-bold mb-1">
-                  Resolved:{" "}
-                  <span className={market.outcome === 1 ? "text-green" : "text-red"}>
-                    {market.outcome === 1 ? "YES" : "NO"}
-                  </span>
+            {/* Right-column action slot — status-driven branching */}
+            <div className="relative">
+              {(market.status === "halted" || market.status === "resolving") ? (
+                // HALT WINDOW: FINAL CALL countdown block
+                resolvesAt ? (
+                  <HaltCountdownBlock
+                    resolvesAt={resolvesAt}
+                    priceYes={market.priceYes}
+                    priceNo={market.priceNo}
+                    volumeTotal={volumeTotal}
+                  />
+                ) : (
+                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 text-center text-sm text-amber-500 font-medium">
+                    Trading locked — resolution imminent
+                  </div>
+                )
+              ) : market.status === "resolved" && market.outcome !== null ? (
+                // RESOLUTION: animated reveal + position-aware outcome
+                <ResolutionReveal
+                  outcome={market.outcome}
+                  priceYes={market.priceYes}
+                  priceNo={market.priceNo}
+                  userPosition={userPosition ?? null}
+                  onRevealComplete={handleRevealComplete}
+                />
+              ) : market.status === "active" && session?.user ? (
+                // ACTIVE: trade panel with optional post-trade share card overlay
+                <>
+                  {postTradeResult && (
+                    <PostTradeShareCard
+                      result={postTradeResult}
+                      onDismiss={() => setPostTradeResult(null)}
+                    />
+                  )}
+                  <TradePanel
+                    marketId={market.id}
+                    prices={prices}
+                    onTradeSuccess={handleTradeSuccess}
+                  />
+                </>
+              ) : !session?.user ? (
+                <div className="bg-card border border-border rounded-xl p-4 text-center">
+                  <p className="text-sm text-muted mb-3">Sign in to start trading</p>
+                  <a
+                    href="/auth/signin"
+                    className="inline-block px-4 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors"
+                  >
+                    Sign In
+                  </a>
                 </div>
-                <p className="text-sm text-muted">
-                  This market has been resolved and payouts distributed.
-                </p>
-              </div>
-            ) : !session?.user ? (
-              <div className="bg-card border border-border rounded-xl p-4 text-center">
-                <p className="text-sm text-muted mb-3">Sign in to start trading</p>
-                <a
-                  href="/auth/signin"
-                  className="inline-block px-4 py-2 bg-accent hover:bg-accent-hover text-white text-sm font-medium rounded-lg transition-colors"
-                >
-                  Sign In
-                </a>
-              </div>
-            ) : (
-              <div className="bg-card border border-border rounded-xl p-4 text-center text-sm text-muted">
-                Trading is not available for this market.
-              </div>
-            )}
+              ) : (
+                <div className="bg-card border border-border rounded-xl p-4 text-center text-sm text-muted">
+                  Trading is not available for this market.
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
