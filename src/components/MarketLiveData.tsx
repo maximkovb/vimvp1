@@ -1,6 +1,6 @@
 "use client";
 
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { useState, useEffect, useRef } from "react";
 import type { UTCTimestamp } from "lightweight-charts";
 import type { Session } from "next-auth";
@@ -11,12 +11,7 @@ import { VideoStatsChart } from "@/components/VideoStatsChart";
 import { MarketStatusBadge } from "@/components/MarketStatusBadge";
 import { CountdownTimer } from "@/components/CountdownTimer";
 import { LastUpdated } from "@/components/LastUpdated";
-
-async function fetcher(url: string): Promise<MarketData> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch market data: ${res.status}`);
-  return res.json();
-}
+import { marketFetcher } from "@/lib/market-fetcher";
 
 interface MarketLiveDataProps {
   marketId: string;
@@ -31,9 +26,10 @@ export function MarketLiveData({
   initialData,
   children,
 }: MarketLiveDataProps) {
+  const { mutate: globalMutate } = useSWRConfig();
   const { data, mutate, isValidating } = useSWR<MarketData>(
     `/api/markets/${marketId}`,
-    fetcher,
+    marketFetcher,
     { refreshInterval: 60_000, fallbackData: initialData }
   );
 
@@ -75,7 +71,7 @@ export function MarketLiveData({
         <MarketStatusBadge status={market.status} />
         {resolvesAt && <CountdownTimer target={resolvesAt} />}
         <div className="ml-auto">
-          <LastUpdated updatedAt={isValidating ? lastFetched : lastFetched} />
+          <LastUpdated updatedAt={lastFetched} />
         </div>
       </div>
 
@@ -211,7 +207,10 @@ export function MarketLiveData({
               <TradePanel
                 marketId={market.id}
                 prices={prices}
-                onTradeSuccess={() => mutate()}
+                onTradeSuccess={() => {
+                  mutate();
+                  globalMutate("/api/balance");
+                }}
               />
             ) : market.status === "resolved" ? (
               <div className="bg-card border border-border rounded-xl p-4 text-center">

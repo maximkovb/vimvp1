@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { useSWRConfig } from "swr";
 import { sellShares } from "@/lib/actions/trade";
 
 interface SellButtonProps {
@@ -12,6 +13,7 @@ interface SellButtonProps {
 
 export function SellButton({ marketId, outcome, maxShares }: SellButtonProps) {
   const router = useRouter();
+  const { mutate } = useSWRConfig();
   const [showModal, setShowModal] = useState(false);
   const [shares, setShares] = useState(maxShares.toFixed(1));
   const [error, setError] = useState("");
@@ -34,6 +36,7 @@ export function SellButton({ marketId, outcome, maxShares }: SellButtonProps) {
         setError(result.error);
       } else {
         setShowModal(false);
+        mutate("/api/balance");
         router.refresh();
       }
     });

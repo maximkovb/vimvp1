@@ -2,10 +2,26 @@ import Link from "next/link";
 import { auth } from "@/lib/auth";
 import { isAdmin } from "@/lib/admin";
 import { UserMenu } from "./UserMenu";
+import { BalanceChip } from "./BalanceChip";
+import { db } from "@/db";
+import { users } from "@/db/schema";
+import { eq } from "drizzle-orm";
 
 export async function Navbar() {
   const session = await auth();
   const admin = isAdmin(session);
+
+  let initialBalance: number | null = null;
+  if (session?.user?.id) {
+    const [user] = await db
+      .select({ balance: users.balance })
+      .from(users)
+      .where(eq(users.id, session.user.id))
+      .limit(1);
+    if (user) {
+      initialBalance = parseFloat(user.balance);
+    }
+  }
 
   return (
     <nav className="border-b border-border bg-card">
@@ -47,6 +63,9 @@ export async function Navbar() {
         </div>
 
         <div className="flex items-center gap-3">
+          {initialBalance !== null && (
+            <BalanceChip initialBalance={initialBalance} />
+          )}
           {admin && (
             <Link
               href="/admin/markets/new"
