@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import "./globals.css";
-import { Navbar } from "@/components/Navbar";
+import { AppShell } from "@/components/AppShell";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -9,9 +9,9 @@ const geistSans = Geist({
 });
 
 export const metadata: Metadata = {
-  title: "Virality — Predict YouTube's Next Hit",
+  title: "Virality — Predict TikTok's Next Hit",
   description:
-    "Bet virtual currency on YouTube video performance. Will it go viral?",
+    "Bet virtual currency on TikTok video performance. Will it go viral?",
 };
 
 export default function RootLayout({
@@ -21,9 +21,14 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${geistSans.variable} antialiased`}>
-      <body className="min-h-screen flex flex-col bg-background text-foreground">
-        <Navbar />
-        <main className="flex-1">{children}</main>
+      <head>
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1, viewport-fit=cover"
+        />
+      </head>
+      <body className="bg-background text-foreground">
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );
