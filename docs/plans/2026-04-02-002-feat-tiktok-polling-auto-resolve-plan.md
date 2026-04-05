@@ -1,7 +1,7 @@
 ---
 title: Poll TikTok analytics every 10 min and auto-resolve on milestone
 type: feat
-status: active
+status: completed
 date: 2026-04-02
 origin: docs/brainstorms/2026-04-02-analytics-polling-requirements.md
 ---

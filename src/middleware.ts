@@ -2,15 +2,18 @@ import { auth } from "@/lib/auth";
 import { NextResponse } from "next/server";
 
 export default auth((req) => {
-  const isAdminRoute = req.nextUrl.pathname.startsWith("/admin");
-  const isPortfolioRoute = req.nextUrl.pathname.startsWith("/portfolio");
+  const { pathname } = req.nextUrl;
+  const isProtected =
+    pathname.startsWith("/admin") ||
+    pathname.startsWith("/portfolio") ||
+    pathname.startsWith("/profile");
 
-  if ((isAdminRoute || isPortfolioRoute) && !req.auth) {
+  if (isProtected && !req.auth) {
     const signInUrl = new URL("/auth/signin", req.url);
     return NextResponse.redirect(signInUrl);
   }
 });
 
 export const config = {
-  matcher: ["/admin/:path*", "/portfolio/:path*"],
+  matcher: ["/admin/:path*", "/portfolio/:path*", "/profile/:path*"],
 };

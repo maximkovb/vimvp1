@@ -1,6 +1,6 @@
 import { db } from "@/db";
-import { markets, tiktokPolls } from "@/db/schema";
-import { desc, eq, or, inArray } from "drizzle-orm";
+import { markets } from "@/db/schema";
+import { desc, eq, or, sql } from "drizzle-orm";
 import { DiscoverFeed } from "@/components/DiscoverFeed";
 
 export default async function HomePage() {
@@ -33,28 +33,23 @@ export default async function HomePage() {
   const mainMarkets = activeMarkets.filter((m) => m.status === "active");
   const feedMarkets = [...resolvingSoon, ...mainMarkets];
 
-  // Fetch latest tiktokPolls row per market (one batch query, pick first per marketId)
+  // Fetch latest poll per market via DISTINCT ON — uses tiktok_polls_market_polled_idx
   let pollData: { marketId: string; viewCount: bigint | null; likeCount: bigint | null }[] = [];
   if (feedMarkets.length > 0) {
     const feedIds = feedMarkets.map((m) => m.id);
-    const allPolls = await db
-      .select({
-        marketId: tiktokPolls.marketId,
-        viewCount: tiktokPolls.viewCount,
-        likeCount: tiktokPolls.likeCount,
-      })
-      .from(tiktokPolls)
-      .where(inArray(tiktokPolls.marketId, feedIds))
-      .orderBy(desc(tiktokPolls.polledAt));
-
-    // Keep only the most recent poll per market
-    const seen = new Set<string>();
-    for (const row of allPolls) {
-      if (!seen.has(row.marketId)) {
-        seen.add(row.marketId);
-        pollData.push(row);
-      }
-    }
+    const result = await db.execute(sql`
+      SELECT DISTINCT ON (market_id) market_id, view_count, like_count
+      FROM tiktok_polls
+      WHERE market_id = ANY(${feedIds})
+      ORDER BY market_id, polled_at DESC
+    `);
+    // db.execute returns a QueryResult with a .rows array
+    type PollRow = { market_id: string; view_count: string | null; like_count: string | null };
+    pollData = (result.rows as PollRow[]).map((r) => ({
+      marketId: r.market_id,
+      viewCount: r.view_count !== null ? BigInt(r.view_count) : null,
+      likeCount: r.like_count !== null ? BigInt(r.like_count) : null,
+    }));
   }
 
   // Trending: top 3 most-recently-created active markets

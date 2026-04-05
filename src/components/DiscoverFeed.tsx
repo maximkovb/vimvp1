@@ -97,12 +97,9 @@ export function DiscoverFeed({
       {/* Feed column — snap scroll container */}
       <div
         ref={feedColumnRef}
-        className="h-screen overflow-y-scroll snap-y snap-mandatory"
-        style={{ scrollbarWidth: "none" }}
+        className="h-screen overflow-y-scroll snap-y snap-mandatory hide-scrollbar"
       >
-        <style>{`div::-webkit-scrollbar { display: none; }`}</style>
-
-        {feedMarkets.map((market) => {
+        {feedMarkets.map((market, index) => {
           const poll = pollMap.get(market.id);
           const prices = getMarketPrices(market);
           const currentCount =
@@ -125,6 +122,7 @@ export function DiscoverFeed({
                 videoMetadata={market.videoMetadata}
                 currentCount={currentCount}
                 isTrending={trendingIds.includes(market.id)}
+                priority={index < 2}
                 onTap={(initialOutcome) => openSheet(market, initialOutcome)}
               />
             </div>

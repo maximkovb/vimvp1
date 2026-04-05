@@ -2,9 +2,9 @@
 
 import { useState, useRef, useTransition, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { fetchVideoStats, generateMarketSuggestion, createMarket } from "@/lib/actions/admin";
-import type { VideoStatsSuccess, SuggestionSuccess } from "@/lib/actions/admin";
-import type { RiskTier, ContractRecommendation, LLMContractRecommendation } from "@/lib/contract";
+import { fetchVideoStats, fetchMarketSuggestion, createMarket } from "@/lib/actions/admin";
+import type { VideoStatsSuccess } from "@/lib/actions/admin";
+import type { RiskTier } from "@/lib/contract";
 import { isLLMRecommendation } from "@/lib/contract";
 
 import { computeStep, computeMilestoneFloor, computeProbability } from "./helpers";
@@ -54,26 +54,20 @@ function ProbabilityBadge({ probability }: { probability: number }) {
   );
 }
 
-// Derived from action return types — stays in sync automatically when actions evolve.
 type VideoStatsData = VideoStatsSuccess;
-type SuggestionData = SuggestionSuccess;
 
 export default function CreateMarketPage() {
   const router = useRouter();
   const [videoUrl, setVideoUrl] = useState("");
 
-  // Phase 1 state
   const [videoStats, setVideoStats] = useState<VideoStatsData | null>(null);
   const [isFetchingStats, setIsFetchingStats] = useState(false);
-
-  // Phase 2 state
-  const [suggestion, setSuggestion] = useState<SuggestionData | null>(null);
-  const [isGeneratingSuggestion, setIsGeneratingSuggestion] = useState(false);
+  const [isFetchingSuggestion, setIsFetchingSuggestion] = useState(false);
 
   const [error, setError] = useState("");
   const [isPending, startTransition] = useTransition();
 
-  // Contract fields — controlled so they can be auto-populated from analytics
+  // Contract fields — controlled so they can be auto-populated
   const [milestoneThreshold, setMilestoneThreshold] = useState("");
   const [bParameter, setBParameter] = useState("100");
   const [resolutionHours, setResolutionHours] = useState("");
@@ -81,10 +75,10 @@ export default function CreateMarketPage() {
   const [questionType, setQuestionType] = useState<"views" | "likes">("views");
   const [titleValue, setTitleValue] = useState("");
 
-  // Live probability — updated on any override after suggestion loads
+  // Live probability — updated on any override
   const [liveProbability, setLiveProbability] = useState<number | null>(null);
 
-  // Anchor — original AI recommendation used as fixed reference for proportional adjustments
+  // Anchor — original recommendation used as fixed reference for proportional adjustments
   const [anchorMilestone, setAnchorMilestone] = useState<number | null>(null);
   const [anchorHours, setAnchorHours] = useState<number | null>(null);
 
@@ -98,8 +92,6 @@ export default function CreateMarketPage() {
   const milestoneFloor = contractLoaded
     ? computeMilestoneFloor(anchorMilestone!, currentAnalytics)
     : 0;
-  // Soft UI max for slider drag range only — not a hard ceiling.
-  // Admin can type any value; the live probability display is the guardrail.
   const milestoneMax = contractLoaded ? Math.round(anchorMilestone! * 5) : 100;
   const milestoneStep = contractLoaded
     ? computeStep(Math.max(milestoneFloor, anchorMilestone!))
@@ -115,19 +107,21 @@ export default function CreateMarketPage() {
   }, [questionType, milestoneFloor]);
 
   // Recompute live probability whenever relevant fields change.
-  // Passes channelAvgViews so the display uses the channel-baseline-floor formula,
-  // matching the same calibration model used by both generation paths.
   useEffect(() => {
-    if (!suggestion || !milestoneThreshold || !resolutionHours) return;
+    if (!videoStats || !milestoneThreshold || !resolutionHours) return;
+    const videoAgeHours = Math.max(
+      (Date.now() - new Date(videoStats.publishedAt).getTime()) / 3_600_000,
+      0.1
+    );
     const prob = computeProbability(
       currentAnalytics,
-      suggestion.videoAgeHours,
+      videoAgeHours,
       Number(resolutionHours),
       Number(milestoneThreshold),
-      suggestion.channelAvgViews
+      videoStats.viewCount
     );
     setLiveProbability(prob);
-  }, [milestoneThreshold, resolutionHours, currentAnalytics, suggestion]);
+  }, [milestoneThreshold, resolutionHours, currentAnalytics, videoStats]);
 
   // Cancellation token — prevents a stale first-fetch response from overwriting
   // form state set by a second fetch that completed first.
@@ -141,7 +135,6 @@ export default function CreateMarketPage() {
     // All resets happen synchronously before the first await
     setError("");
     setVideoStats(null);
-    setSuggestion(null);
     setRiskTier(null);
     setMilestoneThreshold("");
     setBParameter("100");
@@ -151,75 +144,76 @@ export default function CreateMarketPage() {
     setAnchorHours(null);
     setTitleValue("");
     setLiveProbability(null);
+    setIsFetchingSuggestion(false);
 
     if (!videoUrl.trim()) return;
 
+    // Phase 1: fetch video stats
+    let statsResult: VideoStatsData | null = null;
     try {
-      // Phase 1: fast video stats (~500ms)
       setIsFetchingStats(true);
-      const statsResult = await fetchVideoStats(videoUrl);
+      const result = await fetchVideoStats(videoUrl);
       if (token.canceled) return;
       setIsFetchingStats(false);
 
-      if ("error" in statsResult) {
-        setError(statsResult.error ?? "Unknown error");
+      if ("error" in result) {
+        setError(result.error ?? "Unknown error");
         return;
       }
-      setVideoStats(statsResult);
-
-      // Phase 2: channel analytics + market suggestion — YouTube only
-      // TikTok has no equivalent channel analytics API
-      if (statsResult.platform !== "tiktok" && statsResult.channelId) {
-        setIsGeneratingSuggestion(true);
-        const suggestionResult = await generateMarketSuggestion({
-          videoId: statsResult.videoId,
-          title: statsResult.title,
-          channelId: statsResult.channelId,
-          channelTitle: statsResult.channelTitle,
-          publishedAt: statsResult.publishedAt,
-          categoryId: statsResult.categoryId,
-          viewCount: statsResult.viewCount,
-          likeCount: statsResult.likeCount,
-        });
-        if (token.canceled) return;
-        setIsGeneratingSuggestion(false);
-
-        if ("error" in suggestionResult) {
-          setError(suggestionResult.error ?? "Unknown error");
-          return;
-        }
-        setSuggestion(suggestionResult);
-
-        if (suggestionResult.contract) {
-          const aiMilestone = suggestionResult.contract.milestoneThreshold;
-          const clampedMilestone = computeMilestoneFloor(aiMilestone, statsResult.viewCount);
-          const safeResolutionHours = suggestionResult.contract.resolutionHours;
-          setMilestoneThreshold(String(clampedMilestone));
-          setBParameter(String(suggestionResult.contract.bParameter));
-          setResolutionHours(String(safeResolutionHours));
-          setRiskTier(suggestionResult.contract.riskTier);
-          // Anchor is the raw AI suggestion — used as reference for proportional scaling.
-          // The initial displayed value may be floor-clamped, but the anchor stays at AI intent.
-          setAnchorMilestone(aiMilestone);
-          setAnchorHours(safeResolutionHours);
-          if (isLLMRecommendation(suggestionResult.contract)) {
-            const rec = suggestionResult.contract.questionTypeRecommendation;
-            setQuestionType(rec === "likes" ? "likes" : "views");
-          }
-        }
-
-        if (suggestionResult.suggestedTitle) {
-          setTitleValue(suggestionResult.suggestedTitle);
-        }
-      }
+      statsResult = result;
+      setVideoStats(result);
     } catch (err) {
       if (token.canceled) return;
       setError(err instanceof Error ? err.message : "Failed to fetch video");
+      return;
     } finally {
-      if (!token.canceled) {
-        setIsFetchingStats(false);
-        setIsGeneratingSuggestion(false);
+      if (!token.canceled) setIsFetchingStats(false);
+    }
+
+    // Phase 2: generate contract suggestion
+    setIsFetchingSuggestion(true);
+    try {
+      const suggestionResult = await fetchMarketSuggestion({
+        videoId: statsResult.videoId,
+        title: statsResult.title,
+        channelTitle: statsResult.channelTitle,
+        publishedAt: statsResult.publishedAt,
+        viewCount: statsResult.viewCount,
+        likeCount: statsResult.likeCount,
+      });
+      if (token.canceled) return;
+
+      if ("error" in suggestionResult) {
+        // Non-blocking: unlock controls with defaults so admin can fill in manually
+        setAnchorMilestone(statsResult.viewCount || 1);
+        setAnchorHours(48);
+        return;
       }
+
+      const { contract } = suggestionResult;
+      if (contract) {
+        setAnchorMilestone(contract.milestoneThreshold);
+        setAnchorHours(contract.resolutionHours);
+        setMilestoneThreshold(String(contract.milestoneThreshold));
+        setResolutionHours(String(contract.resolutionHours));
+        setBParameter(String(contract.bParameter));
+        setRiskTier(contract.riskTier);
+        if (isLLMRecommendation(contract)) {
+          setTitleValue(contract.suggestedTitle);
+          setQuestionType(contract.questionTypeRecommendation);
+        }
+      } else {
+        // Null contract: unlock with defaults
+        setAnchorMilestone(statsResult.viewCount || 1);
+        setAnchorHours(48);
+      }
+    } catch {
+      if (token.canceled) return;
+      // Suggestion failed — unlock controls with defaults
+      setAnchorMilestone(statsResult.viewCount || 1);
+      setAnchorHours(48);
+    } finally {
+      if (!token.canceled) setIsFetchingSuggestion(false);
     }
   }
 
@@ -242,7 +236,6 @@ export default function CreateMarketPage() {
   }
 
   // Slider moves milestone only — resolution window is independent (one-way binding).
-  // Selecting a resolution button will proportionally update the milestone, but not vice versa.
   function handleMilestoneSlider(rawValue: string) {
     const value = Math.round(Number(rawValue));
     setMilestoneThreshold(String(value));
@@ -256,26 +249,17 @@ export default function CreateMarketPage() {
     }
   }
 
-  const llmContract =
-    suggestion?.contract && isLLMRecommendation(suggestion.contract)
-      ? suggestion.contract
-      : null;
-
   const publishDisabled =
     isFetchingStats ||
-    isGeneratingSuggestion ||
+    isFetchingSuggestion ||
     isPending ||
     !videoStats ||
     !milestoneThreshold ||
     !resolutionHours;
 
-  // videoAgeHours for the stats panel: use server-computed value once available,
-  // otherwise derive from publishedAt so the panel renders immediately after Phase 1
-  const videoAgeHours =
-    suggestion?.videoAgeHours ??
-    (videoStats
-      ? Math.max((Date.now() - new Date(videoStats.publishedAt).getTime()) / 3_600_000, 0.1)
-      : 0);
+  const videoAgeHours = videoStats
+    ? Math.max((Date.now() - new Date(videoStats.publishedAt).getTime()) / 3_600_000, 0.1)
+    : 0;
 
   return (
     <div className="max-w-2xl">
@@ -284,7 +268,7 @@ export default function CreateMarketPage() {
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* Video URL */}
         <div>
-          <label className="block text-sm font-medium mb-1.5">Video URL (YouTube or TikTok)</label>
+          <label className="block text-sm font-medium mb-1.5">TikTok Video URL</label>
           <div className="flex gap-2">
             <input
               type="text"
@@ -296,16 +280,16 @@ export default function CreateMarketPage() {
                   handleFetchVideo();
                 }
               }}
-              placeholder="https://youtube.com/shorts/... or https://www.tiktok.com/@user/video/..."
+              placeholder="https://www.tiktok.com/@creator/video/..."
               className="flex-1 px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent"
             />
             <button
               type="button"
               onClick={handleFetchVideo}
-              disabled={isFetchingStats}
+              disabled={isFetchingStats || isFetchingSuggestion}
               className="px-4 py-2 bg-accent text-white text-sm rounded-lg hover:bg-accent-hover disabled:opacity-50 transition-colors"
             >
-              {isFetchingStats ? "Fetching…" : "Fetch"}
+              {isFetchingStats ? "Fetching…" : isFetchingSuggestion ? "Generating…" : "Fetch"}
             </button>
           </div>
         </div>
@@ -316,7 +300,7 @@ export default function CreateMarketPage() {
             <img
               src={videoStats.thumbnail}
               alt={videoStats.title}
-              className="w-32 h-auto rounded"
+              className="w-24 h-auto rounded"
             />
             <div className="text-sm flex-1 min-w-0">
               <div className="font-medium truncate">{videoStats.title}</div>
@@ -325,57 +309,35 @@ export default function CreateMarketPage() {
                 {riskTier && <RiskBadge tier={riskTier} />}
                 {liveProbability !== null && <ProbabilityBadge probability={liveProbability} />}
               </div>
-              {isGeneratingSuggestion && (
-                <div className="mt-2 text-xs text-muted animate-pulse">
-                  Generating market suggestion…
-                </div>
-              )}
-              {llmContract && (
-                <div className="mt-3 p-3 bg-muted/40 rounded-md border border-border/50">
-                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                    AI Analysis
-                  </span>
-                  <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
-                    {llmContract.reasoning}
-                  </p>
-                </div>
-              )}
             </div>
           </div>
         )}
 
-        {/* Stats panel — visible after Phase 1; skeleton cells fill in after Phase 2 */}
+        {/* Stats panel */}
         {videoStats && (
           <MarketStatsPanel
             viewCount={videoStats.viewCount}
             likeCount={videoStats.likeCount}
             videoAgeHours={videoAgeHours}
-            subscriberCount={suggestion ? suggestion.subscriberCount : null}
-            channelAvgViews={suggestion ? suggestion.channelAvgViews : null}
+            subscriberCount={null}
+            channelAvgViews={null}
           />
-        )}
-
-        {/* Duplicate warning */}
-        {suggestion?.duplicateWarning && (
-          <div className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg text-sm text-yellow-600">
-            An active or draft market already exists for this video. You can still publish a new one.
-          </div>
         )}
 
         {/* Hidden inputs so createMarket can read metadata without re-fetching */}
         <input type="hidden" name="videoTitle" value={videoStats?.title ?? ""} />
         <input type="hidden" name="thumbnail" value={videoStats?.thumbnail ?? ""} />
         <input type="hidden" name="channelTitle" value={videoStats?.channelTitle ?? ""} />
-        <input type="hidden" name="channelId" value={videoStats?.channelId ?? ""} />
-        <input type="hidden" name="creatorId" value={"creatorId" in (videoStats ?? {}) ? (videoStats as { creatorId?: string }).creatorId ?? "" : ""} />
-        <input type="hidden" name="tikapiPostId" value={"tikapiPostId" in (videoStats ?? {}) ? (videoStats as { tikapiPostId?: string }).tikapiPostId ?? "" : ""} />
+        <input type="hidden" name="creatorId" value={videoStats?.creatorId ?? ""} />
+        <input type="hidden" name="tikapiPostId" value={videoStats?.tikapiPostId ?? ""} />
         <input type="hidden" name="videoDescription" value={videoStats?.description ?? ""} />
+        <input type="hidden" name="playUrl" value={videoStats?.playUrl ?? ""} />
         <input type="hidden" name="initialViewCount" value={videoStats?.viewCount ?? ""} />
         <input type="hidden" name="initialLikeCount" value={videoStats?.likeCount ?? ""} />
         <input type="hidden" name="publishedAt" value={videoStats?.publishedAt ?? ""} />
-        <input type="hidden" name="channelAvgViews" value={suggestion?.channelAvgViews ?? ""} />
+        <input type="hidden" name="channelAvgViews" value="" />
 
-        {/* Market title — pre-populated from AI suggestion, editable */}
+        {/* Market title — editable */}
         <div>
           <label className="block text-sm font-medium mb-1.5">Market Title</label>
           <input
@@ -384,7 +346,7 @@ export default function CreateMarketPage() {
             required
             value={titleValue}
             onChange={(e) => setTitleValue(e.target.value)}
-            placeholder='e.g. "Will this Short hit 500K views in 48h?"'
+            placeholder='e.g. "Will this TikTok hit 500K views in 48h?"'
             className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent"
           />
         </div>

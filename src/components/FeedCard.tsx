@@ -19,6 +19,7 @@ interface FeedCardProps {
   } | null;
   currentCount: bigint | null; // latest viewCount or likeCount from tiktokPolls
   isTrending: boolean;
+  priority?: boolean;
   onTap: (initialOutcome?: number) => void;
 }
 
@@ -99,12 +100,14 @@ export function FeedCard({
   videoMetadata,
   currentCount,
   isTrending,
+  priority = false,
   onTap,
 }: FeedCardProps) {
-  const hasThumbnail =
-    videoMetadata?.thumbnail && TIKTOK_THUMBNAIL_RE.test(videoMetadata.thumbnail);
+  const thumbnailSrc =
+    videoMetadata?.thumbnail && TIKTOK_THUMBNAIL_RE.test(videoMetadata.thumbnail)
+      ? videoMetadata.thumbnail
+      : null;
   const isTrading = status === "active";
-  const isHalted = status === "halted" || status === "resolving";
 
   return (
     <div
@@ -112,13 +115,13 @@ export function FeedCard({
       onClick={() => isTrading && onTap()}
     >
       {/* Thumbnail background */}
-      {hasThumbnail ? (
+      {thumbnailSrc ? (
         <Image
-          src={videoMetadata!.thumbnail}
+          src={thumbnailSrc}
           alt={title}
           fill
           className="object-cover"
-          priority
+          priority={priority}
         />
       ) : (
         <div className="absolute inset-0 bg-gradient-to-br from-card to-background" />
@@ -135,7 +138,7 @@ export function FeedCard({
 
       {/* Top-left badge */}
       <div className="absolute top-4 left-4 z-10">
-        {isHalted ? (
+        {(status === "halted" || status === "resolving") ? (
           <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/40 uppercase tracking-wide">
             {status === "resolving" ? "Resolving" : "Halted"}
           </span>
@@ -161,7 +164,7 @@ export function FeedCard({
 
         {/* Milestone label */}
         <p className="text-xs text-white/40 mb-3">
-          Target: {Number(milestoneThreshold).toLocaleString()} {questionType}s
+          Target: {Number(milestoneThreshold).toLocaleString()} {questionType}
         </p>
 
         {/* YES / NO buttons */}

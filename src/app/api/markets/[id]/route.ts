@@ -1,15 +1,16 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
-import { markets, priceSnapshots, trades, youtubePolls } from "@/db/schema";
-import { eq, desc } from "drizzle-orm";
+import { markets, priceSnapshots, trades, tiktokPolls, positions } from "@/db/schema";
+import { eq, desc, and } from "drizzle-orm";
 import { allPrices } from "@/lib/lmsr";
+import { auth } from "@/lib/auth";
 
 // GET /api/markets/[id] — returns single market state with price history
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { id } = await params;
+  const [{ id }, session] = await Promise.all([params, auth()]);
 
   const [market] = await db
     .select()
@@ -28,7 +29,7 @@ export async function GET(
   const b = parseFloat(market.bParameter);
   const [priceYes, priceNo] = allPrices(quantities, b);
 
-  const [history, recentTrades, polls] = await Promise.all([
+  const [history, recentTrades, polls, positionRows] = await Promise.all([
     db
       .select({
         time: priceSnapshots.recordedAt,
@@ -48,15 +49,31 @@ export async function GET(
       .limit(20),
     db
       .select({
-        polledAt: youtubePolls.polledAt,
-        viewCount: youtubePolls.viewCount,
-        likeCount: youtubePolls.likeCount,
+        polledAt: tiktokPolls.polledAt,
+        viewCount: tiktokPolls.viewCount,
+        likeCount: tiktokPolls.likeCount,
       })
-      .from(youtubePolls)
-      .where(eq(youtubePolls.marketId, id))
-      .orderBy(youtubePolls.polledAt)
+      .from(tiktokPolls)
+      .where(eq(tiktokPolls.marketId, id))
+      .orderBy(tiktokPolls.polledAt)
       .limit(500),
+    // User's position — only fetched when authenticated
+    session?.user?.id
+      ? db
+          .select()
+          .from(positions)
+          .where(and(eq(positions.userId, session.user.id), eq(positions.marketId, id)))
+      : Promise.resolve([]),
   ]);
+
+  const activePosition = positionRows.find((r) => parseFloat(r.shares) > 0.000001) ?? null;
+  const userPosition = activePosition
+    ? {
+        outcome: activePosition.outcome,
+        shares: parseFloat(activePosition.shares),
+        avgCostBasis: parseFloat(activePosition.avgCostBasis),
+      }
+    : null;
 
   return NextResponse.json({
     id: market.id,
@@ -66,7 +83,6 @@ export async function GET(
     questionType: market.questionType,
     milestoneThreshold: market.milestoneThreshold.toString(),
     videoId: market.videoId,
-    platform: market.platform,
     videoMetadata: market.videoMetadata,
     priceYes,
     priceNo,
@@ -93,5 +109,6 @@ export async function GET(
       viewCount: p.viewCount !== null ? Number(p.viewCount) : null,
       likeCount: p.likeCount !== null ? Number(p.likeCount) : null,
     })),
+    userPosition,
   });
 }

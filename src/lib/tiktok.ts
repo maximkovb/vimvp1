@@ -10,6 +10,8 @@ export interface TikTokStats {
   creatorId: string;
   thumbnailUrl: string;
   tikapiPostId: string;
+  /** Direct MP4 URL from TikWM CDN. CDN-signed, expires ~24h. */
+  playUrl: string;
 }
 
 /**
@@ -70,5 +72,6 @@ export async function fetchTikTokStatsById(
     creatorId:    d.author?.unique_id ?? "",
     thumbnailUrl: d.cover ?? "",
     tikapiPostId: d.id ?? videoId,
+    playUrl: d.play ?? "",
   };
 }

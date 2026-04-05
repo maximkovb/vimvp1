@@ -1,25 +1,24 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { Drawer } from "vaul";
 import useSWR from "swr";
+import { marketFetcher } from "@/lib/market-fetcher";
 import { TradePanel, type TradeResult } from "./TradePanel";
 import { PriceChart } from "./PriceChart";
 import { SellButton } from "./SellButton";
-import { getUserPosition, type UserPosition } from "@/lib/actions/trade";
+import type { MarketData } from "@/types/market";
 import type { UTCTimestamp } from "lightweight-charts";
 
 interface BetSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   marketId: string;
-  prices: number[];
+  prices: number[]; // SSR-derived initial skeleton; replaced by live prices once SWR resolves
   initialOutcome?: number;
   title: string;
   containerRef?: React.RefObject<HTMLDivElement | null>;
 }
-
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 export function BetSheet({
   open,
@@ -31,39 +30,43 @@ export function BetSheet({
   containerRef,
 }: BetSheetProps) {
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [position, setPosition] = useState<UserPosition | null | "loading">("loading");
 
-  // Fetch market data (price history) only when sheet is open
-  const { data: marketData } = useSWR(
+  // Fetch market data (live prices + price history + user position) when sheet is open.
+  // Uses the shared fetcher so SWR deduplicates with other components on the same key.
+  const { data: marketData } = useSWR<MarketData>(
     open && marketId ? `/api/markets/${marketId}` : null,
-    fetcher
+    marketFetcher
   );
 
+  // Use live prices from the API; fall back to SSR prop only while loading
+  const livePrices: number[] = marketData
+    ? [marketData.priceYes, marketData.priceNo]
+    : prices;
+
   const chartData: { time: UTCTimestamp; value: number }[] = marketData?.priceHistory
-    ? marketData.priceHistory.map((p: { time: string; priceYes: number }) => ({
+    ? marketData.priceHistory.map((p) => ({
         time: (new Date(p.time).getTime() / 1000) as UTCTimestamp,
         value: p.priceYes,
       }))
     : [];
 
-  // Fetch user position when sheet opens
-  useEffect(() => {
-    if (!open) return;
-    setPosition("loading");
-    getUserPosition(marketId).then((pos) => setPosition(pos));
-  }, [open, marketId]);
+  // Position comes from the API response — no separate server action call needed
+  const position = marketData?.userPosition ?? null;
 
-  // Body scroll lock while sheet is open (prevents feed scrolling on iOS Safari)
+  // Scroll lock: target the actual scrollable feed container, not document.body.
+  // document.body overflow:hidden is ignored by iOS Safari when the scroll is on a child element.
   useEffect(() => {
+    const el = containerRef?.current;
+    if (!el) return;
     if (open) {
-      document.body.style.overflow = "hidden";
+      el.style.overflow = "hidden";
     } else {
-      document.body.style.overflow = "";
+      el.style.overflow = "";
     }
     return () => {
-      document.body.style.overflow = "";
+      el.style.overflow = "";
     };
-  }, [open]);
+  }, [open, containerRef]);
 
   function handleTradeSuccess(_result: TradeResult) {
     // Auto-dismiss after 1.5s
@@ -80,12 +83,9 @@ export function BetSheet({
   }, [open]);
 
   return (
-    <Drawer.Root
-      open={open}
-      onOpenChange={onOpenChange}
-      container={containerRef?.current ?? undefined}
-    >
-      <Drawer.Portal container={containerRef?.current ?? undefined}>
+    // No container prop — vaul portals to document.body for correct fixed positioning and focus trap
+    <Drawer.Root open={open} onOpenChange={onOpenChange}>
+      <Drawer.Portal>
         <Drawer.Overlay className="fixed inset-0 bg-black/50 z-40" />
         <Drawer.Content
           className="fixed bottom-0 left-0 right-0 z-50 bg-card border-t border-border rounded-t-2xl max-h-[90vh] flex flex-col outline-none"
@@ -115,13 +115,13 @@ export function BetSheet({
 
             <TradePanel
               marketId={marketId}
-              prices={prices}
+              prices={livePrices}
               initialOutcome={initialOutcome}
               onTradeSuccess={handleTradeSuccess}
             />
 
-            {/* Sell controls — only shown when user has a position */}
-            {position !== "loading" && position !== null && (
+            {/* Sell controls — shown when the API confirms the user holds shares */}
+            {position !== null && (
               <div className="border-t border-border pt-4">
                 <p className="text-xs text-muted mb-2">
                   Your position: {position.outcome === 0 ? "YES" : "NO"} —{" "}

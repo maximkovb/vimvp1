@@ -12,7 +12,7 @@ interface BalanceData {
 }
 
 interface BalanceChipProps {
-  initialBalance: number;
+  initialBalance?: number;
 }
 
 async function balanceFetcher(url: string): Promise<BalanceData> {
@@ -76,7 +76,7 @@ function isClaimedToday(lastLoginReward: string | null): boolean {
   );
 }
 
-export function BalanceChip({ initialBalance }: BalanceChipProps) {
+export function BalanceChip({ initialBalance = 0 }: BalanceChipProps) {
   const { mutate: globalMutate } = useSWRConfig();
   const { data } = useSWR<BalanceData>("/api/balance", balanceFetcher, {
     fallbackData: { balance: initialBalance, loginStreak: 0, lastLoginReward: null },

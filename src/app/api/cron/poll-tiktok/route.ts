@@ -27,6 +27,9 @@ export async function GET(request: Request) {
   const authError = verifyCronAuth(request);
   if (authError) return authError;
 
+  const { searchParams } = new URL(request.url);
+  const force = searchParams.get("force") === "true";
+
   // Fetch active and halted TikTok markets only
   const activeMarkets = await db
     .select()
@@ -37,42 +40,66 @@ export async function GET(request: Request) {
     return NextResponse.json({ polled: 0 });
   }
 
-  // Get last poll time for each market
+  // Get last poll time for each market.
+  // Use EXTRACT(EPOCH) to return Unix milliseconds — avoids timezone ambiguity when
+  // Neon returns plain TIMESTAMP strings that new Date() would misparse as local time.
   const marketIds = activeMarkets.map((m) => m.id);
   const lastPollRows = await db.execute(
-    sql`SELECT market_id, MAX(polled_at) as last_polled_at FROM tiktok_polls WHERE market_id = ANY(ARRAY[${sql.join(marketIds.map((id) => sql`${id}`), sql`, `)}]) GROUP BY market_id`
+    sql`SELECT market_id, EXTRACT(EPOCH FROM MAX(polled_at))::bigint * 1000 AS last_polled_ms FROM tiktok_polls WHERE market_id = ANY(ARRAY[${sql.join(marketIds.map((id) => sql`${id}`), sql`, `)}]) GROUP BY market_id`
   );
 
   const lastPollByMarket = new Map<string, Date>();
   for (const row of lastPollRows.rows as {
     market_id: string;
-    last_polled_at: Date;
+    last_polled_ms: string | number | bigint;
   }[]) {
-    lastPollByMarket.set(row.market_id, row.last_polled_at);
+    lastPollByMarket.set(row.market_id, new Date(Number(row.last_polled_ms)));
   }
 
-  const marketsToPoll = activeMarkets.filter((m) =>
-    shouldPoll(m, lastPollByMarket.get(m.id) ?? null)
-  );
+  const marketsToPoll = force
+    ? activeMarkets
+    : activeMarkets.filter((m) => shouldPoll(m, lastPollByMarket.get(m.id) ?? null));
 
   if (marketsToPoll.length === 0) {
-    return NextResponse.json({ polled: 0, skipped: activeMarkets.length });
+    // Debug: show why each market was skipped
+    const skipReasons = activeMarkets.map((m) => {
+      const lastPollAt = lastPollByMarket.get(m.id) ?? null;
+      const minsAgo = lastPollAt ? Math.round((Date.now() - lastPollAt.getTime()) / 60000) : null;
+      return {
+        id: m.id.slice(0, 8),
+        status: m.status,
+        hasResolvesAt: !!m.resolvesAt,
+        lastPollMinsAgo: minsAgo,
+        reason: !m.resolvesAt ? "no resolvesAt" : minsAgo !== null && minsAgo < 10 ? `only ${minsAgo}m ago` : "unknown",
+      };
+    });
+    return NextResponse.json({ polled: 0, skipped: activeMarkets.length, skipReasons });
   }
 
   let polledCount = 0;
+  let nullStatsCount = 0;
   let earlyResolvedCount = 0;
   const errors: string[] = [];
   const resolveErrors: string[] = [];
+  const details: { id: string; videoId: string; views: number | null; likes: number | null }[] = [];
 
   for (const market of marketsToPoll) {
     try {
       const stats = await fetchTikTokStatsById(market.videoId);
 
-      await db.insert(tiktokPolls).values({
-        marketId: market.id,
-        viewCount: stats !== null ? BigInt(stats.viewCount) : null,
-        likeCount: stats !== null ? BigInt(stats.likeCount) : null,
-      });
+      // Only persist a poll row when we have real data — null rows (TikWM failure,
+      // deleted/private video) would poison pollHistory and blank the UI.
+      if (stats !== null) {
+        await db.insert(tiktokPolls).values({
+          marketId: market.id,
+          viewCount: BigInt(stats.viewCount),
+          likeCount: BigInt(stats.likeCount),
+        });
+        details.push({ id: market.id.slice(0, 8), videoId: market.videoId, views: stats.viewCount, likes: stats.likeCount });
+      } else {
+        nullStatsCount++;
+        details.push({ id: market.id.slice(0, 8), videoId: market.videoId, views: null, likes: null });
+      }
 
       // Update videoMetadata thumbnail if TikTok CDN URL changed (signed URLs rotate).
       // Only persist URLs from the known TikTok CDN domain to prevent injection.
@@ -138,9 +165,11 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     polled: polledCount,
+    nullStats: nullStatsCount > 0 ? nullStatsCount : undefined,
     skipped: activeMarkets.length - marketsToPoll.length,
     earlyResolved: earlyResolvedCount > 0 ? earlyResolvedCount : undefined,
     errors: errors.length > 0 ? errors : undefined,
     resolveErrors: resolveErrors.length > 0 ? resolveErrors : undefined,
+    details,
   });
 }

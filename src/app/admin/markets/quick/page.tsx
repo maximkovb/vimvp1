@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { fetchVideoStats, createTestMarket, type VideoStatsSuccess } from "@/lib/actions/admin";
-import { extractVideoId } from "@/lib/youtube";
+import { isTikTokUrl } from "@/lib/tiktok";
 
 export default function QuickCreatePage() {
   const [videoUrl, setVideoUrl] = useState("");
@@ -62,7 +62,7 @@ export default function QuickCreatePage() {
     }
   }
 
-  const canFetch = !!extractVideoId(videoUrl.trim()) && !isFetching;
+  const canFetch = isTikTokUrl(videoUrl.trim()) && !isFetching;
   const canCreate = !!videoStats && !!milestone && parseFloat(milestone) >= 1
     && contractTitle.trim().length > 0 && !isCreating;
 
@@ -78,14 +78,14 @@ export default function QuickCreatePage() {
 
       {/* Step 1: URL */}
       <div className="bg-card border border-border rounded-xl p-4 mb-4">
-        <h2 className="text-sm font-medium mb-3">Step 1 — Paste YouTube URL</h2>
+        <h2 className="text-sm font-medium mb-3">Step 1 — Paste TikTok URL</h2>
         <div className="flex gap-2">
           <input
             type="text"
             value={videoUrl}
             onChange={(e) => setVideoUrl(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && canFetch) handleFetch(); }}
-            placeholder="https://youtube.com/watch?v=..."
+            placeholder="https://www.tiktok.com/@creator/video/..."
             className="flex-1 px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent"
           />
           <button

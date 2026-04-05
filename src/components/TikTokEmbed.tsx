@@ -7,6 +7,7 @@ interface TikTokEmbedProps {
   title?: string;
   playUrl?: string | null;
   thumbnail?: string | null;
+  creatorId?: string | null;
 }
 
 function MutedIcon() {
@@ -33,7 +34,7 @@ function PlayIcon() {
   );
 }
 
-export function TikTokEmbed({ videoId, title, playUrl, thumbnail }: TikTokEmbedProps) {
+export function TikTokEmbed({ videoId, title, playUrl, thumbnail, creatorId }: TikTokEmbedProps) {
   const [currentPlayUrl, setCurrentPlayUrl] = useState(playUrl ?? null);
   const [refreshing, setRefreshing] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
@@ -132,7 +133,11 @@ export function TikTokEmbed({ videoId, title, playUrl, thumbnail }: TikTokEmbedP
 
       {/* Link to original video */}
       <a
-        href={`https://vm.tiktok.com/${videoId}`}
+        href={
+          creatorId
+            ? `https://www.tiktok.com/@${creatorId}/video/${videoId}`
+            : `https://www.tiktok.com/video/${videoId}`
+        }
         target="_blank"
         rel="noopener noreferrer"
         className="text-xs text-muted hover:text-accent hover:underline self-end"
