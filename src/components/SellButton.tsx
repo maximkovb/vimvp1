@@ -36,6 +36,7 @@ export function SellButton({ marketId, outcome, maxShares }: SellButtonProps) {
         setError(result.error);
       } else {
         setShowModal(false);
+        mutate(`/api/markets/${marketId}`);
         mutate("/api/balance");
         router.refresh();
       }

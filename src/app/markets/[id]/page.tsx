@@ -145,7 +145,7 @@ export default async function MarketPage({
         </div>
 
         {/* Right column: sticky HUD */}
-        <div className="w-full lg:flex-1 lg:sticky lg:top-4">
+        <div className="w-full lg:flex-1 lg:max-w-[400px] lg:sticky lg:top-4">
           <MarketHUD marketId={id} session={session} initialData={initialData} />
         </div>
       </div>
