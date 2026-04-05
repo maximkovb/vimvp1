@@ -17,10 +17,13 @@ interface FeedMarket {
   resolvedAt: Date | null;
   outcome: number | null;
   createdAt: Date;
+  videoId: string;
   videoMetadata: {
     title: string;
     thumbnail: string;
     channelTitle: string;
+    playUrl?: string | null;
+    creatorId?: string | null;
   } | null;
   quantityYes: string;
   quantityNo: string;
@@ -119,6 +122,7 @@ export function DiscoverFeed({
                 milestoneThreshold={market.milestoneThreshold}
                 priceYes={prices[0]}
                 priceNo={prices[1]}
+                videoId={market.videoId}
                 videoMetadata={market.videoMetadata}
                 currentCount={currentCount}
                 isTrending={trendingIds.includes(market.id)}
