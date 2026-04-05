@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
 :root {
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --background: #0f0f13;
   --foreground: #e8e8ed;
   --card: #1a1a24;
