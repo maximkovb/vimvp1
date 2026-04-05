@@ -13,11 +13,12 @@ export interface TradeResult {
 interface TradePanelProps {
   marketId: string;
   prices: number[];
+  initialOutcome?: number;
   onTradeSuccess?: (result: TradeResult) => void;
 }
 
-export function TradePanel({ marketId, prices, onTradeSuccess }: TradePanelProps) {
-  const [outcome, setOutcome] = useState<number>(0); // 0=YES, 1=NO
+export function TradePanel({ marketId, prices, initialOutcome, onTradeSuccess }: TradePanelProps) {
+  const [outcome, setOutcome] = useState<number>(initialOutcome ?? 0); // 0=YES, 1=NO
   const [amount, setAmount] = useState("");
   const [preview, setPreview] = useState<TradePreview | null>(null);
   const [error, setError] = useState("");
