@@ -3,6 +3,7 @@
 import { useState, useRef } from "react";
 import { FeedCard } from "./FeedCard";
 import { FeedEndGrid } from "./FeedEndGrid";
+import { BetSheet } from "./BetSheet";
 import { getMarketPrices } from "@/lib/market-utils";
 import type { MarketStatus, QuestionType } from "@/db/schema";
 
@@ -136,26 +137,16 @@ export function DiscoverFeed({
         </div>
       </div>
 
-      {/* BetSheet — rendered here so it can receive feedColumnRef for desktop positioning */}
-      {/* Phase 4 will add <BetSheet ... container={feedColumnRef} /> here */}
-      {sheet.open && (
-        <div className="fixed inset-0 z-50 flex items-end" onClick={closeSheet}>
-          <div
-            className="w-full bg-card border-t border-border rounded-t-2xl p-6 max-h-[85vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="w-10 h-1 bg-border rounded-full mx-auto mb-4" />
-            <p className="text-sm text-muted mb-4 line-clamp-2">{sheet.title}</p>
-            {/* TradePanel injected in Phase 4 */}
-            <button
-              onClick={closeSheet}
-              className="w-full py-2 text-sm text-muted border border-border rounded-lg"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Bet sheet */}
+      <BetSheet
+        open={sheet.open}
+        onOpenChange={(v) => !v && closeSheet()}
+        marketId={sheet.marketId}
+        prices={sheet.prices}
+        initialOutcome={sheet.initialOutcome}
+        title={sheet.title}
+        containerRef={feedColumnRef}
+      />
     </>
   );
 }
