@@ -37,10 +37,12 @@ export default async function HomePage() {
   let pollData: { marketId: string; viewCount: bigint | null; likeCount: bigint | null }[] = [];
   if (feedMarkets.length > 0) {
     const feedIds = feedMarkets.map((m) => m.id);
+    // Build ARRAY[$1,$2,...] explicitly — passing a JS array directly produces ($1,$2,...) tuple syntax
+    const idsLiteral = sql.join(feedIds.map((id) => sql`${id}`), sql`, `);
     const result = await db.execute(sql`
       SELECT DISTINCT ON (market_id) market_id, view_count, like_count
       FROM tiktok_polls
-      WHERE market_id = ANY(${feedIds})
+      WHERE market_id = ANY(ARRAY[${idsLiteral}])
       ORDER BY market_id, polled_at DESC
     `);
     // db.execute returns a QueryResult with a .rows array
