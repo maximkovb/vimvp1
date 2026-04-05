@@ -34,25 +34,26 @@ function ProgressRing({
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
 
+  const targetNum = Number(target);
+  const currentNum = current !== null ? Number(current) : null;
+
   const pct =
-    current !== null && target > 0n
-      ? Math.min(Number((current * 1000n) / target) / 1000, 1)
+    currentNum !== null && targetNum > 0
+      ? Math.min(currentNum / targetNum, 1)
       : 0;
   const offset = circumference * (1 - pct);
 
-  const formatCount = (n: bigint | null) => {
+  const formatCount = (n: number | null) => {
     if (n === null) return "—";
-    const num = Number(n);
-    if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
-    if (num >= 1_000) return `${(num / 1_000).toFixed(0)}K`;
-    return num.toString();
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
+    return n.toString();
   };
 
-  const formatTarget = (n: bigint) => {
-    const num = Number(n);
-    if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(0)}M`;
-    if (num >= 1_000) return `${(num / 1_000).toFixed(0)}K`;
-    return num.toString();
+  const formatTarget = (n: number) => {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(0)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
+    return n.toString();
   };
 
   return (
@@ -80,9 +81,9 @@ function ProgressRing({
       </svg>
       <div className="relative z-10 text-center leading-tight">
         <div className="text-[10px] font-bold text-foreground tabular-nums">
-          {formatCount(current)}
+          {formatCount(currentNum)}
         </div>
-        <div className="text-[8px] text-muted">/{formatTarget(target)}</div>
+        <div className="text-[8px] text-muted">/{formatTarget(targetNum)}</div>
       </div>
     </div>
   );

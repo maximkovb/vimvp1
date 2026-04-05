@@ -107,7 +107,7 @@ export function DiscoverFeed({
           const prices = getMarketPrices(market);
           const currentCount =
             poll
-              ? market.questionType === "like"
+              ? market.questionType === "likes"
                 ? (poll.likeCount ?? null)
                 : (poll.viewCount ?? null)
               : null;
