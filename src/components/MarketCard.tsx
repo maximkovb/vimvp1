@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { TIKTOK_THUMBNAIL_RE } from "@/lib/constants";
+import { formatOutcome } from "@/lib/format";
 import { MarketStatusBadge } from "./MarketStatusBadge";
 import { CountdownTimer } from "./CountdownTimer";
 import type { MarketStatus, QuestionType } from "@/db/schema";
@@ -68,10 +69,10 @@ export function MarketCard({
           {status === "resolved" && (
             <span
               className={`text-xs font-bold ${
-                outcome === 1 ? "text-green" : "text-red"
+                outcome === 0 ? "text-green" : "text-red"
               }`}
             >
-              {outcome === 1 ? "YES" : "NO"}
+              {outcome !== null ? formatOutcome(outcome) : null}
             </span>
           )}
         </div>

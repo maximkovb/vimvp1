@@ -80,6 +80,7 @@ export function BalanceChip({ initialBalance = 0 }: BalanceChipProps) {
   const { mutate: globalMutate } = useSWRConfig();
   const { data } = useSWR<BalanceData>("/api/balance", balanceFetcher, {
     fallbackData: { balance: initialBalance, loginStreak: 0, lastLoginReward: null },
+    revalidateOnFocus: false,
   });
 
   const [open, setOpen] = useState(false);

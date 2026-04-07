@@ -2,6 +2,7 @@
 
 import { useState, useTransition, useRef } from "react";
 import { buyShares, previewTrade, type TradePreview } from "@/lib/actions/trade";
+import { formatOutcome } from "@/lib/format";
 
 export interface TradeResult {
   outcome: number; // 0=YES, 1=NO
@@ -44,20 +45,22 @@ export function TradePanel({ marketId, prices, initialOutcome, onTradeSuccess }:
     }, 400);
   }
 
-  async function handleOutcomeChange(newOutcome: number) {
+  function handleOutcomeChange(newOutcome: number) {
     setOutcome(newOutcome);
     setPreview(null);
-    if (amount) {
-      const numAmount = parseFloat(amount);
-      if (numAmount > 0) {
-        const result = await previewTrade(marketId, newOutcome, numAmount);
-        if ("error" in result) {
-          setError(result.error);
-        } else {
-          setPreview(result);
-        }
+
+    const numAmount = parseFloat(amount);
+    if (!numAmount || numAmount <= 0) return;
+
+    if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+    previewTimerRef.current = setTimeout(async () => {
+      const result = await previewTrade(marketId, newOutcome, numAmount);
+      if ("error" in result) {
+        setError(result.error);
+      } else {
+        setPreview(result);
       }
-    }
+    }, 400);
   }
 
   function handleBuy() {
@@ -194,7 +197,7 @@ export function TradePanel({ marketId, prices, initialOutcome, onTradeSuccess }:
       >
         {isPending
           ? "Buying..."
-          : `Buy ${outcome === 0 ? "YES" : "NO"} — ${amount || "0"} coins`}
+          : `Buy ${formatOutcome(outcome)} — ${amount || "0"} coins`}
       </button>
     </div>
   );

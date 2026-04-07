@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { FeedCard } from "./FeedCard";
 import { FeedEndGrid } from "./FeedEndGrid";
 import { BetSheet } from "./BetSheet";
@@ -30,10 +30,6 @@ interface FeedMarket {
   bParameter: string;
 }
 
-interface GridMarket extends FeedMarket {
-  // same shape, used for the end grid
-}
-
 interface PollData {
   marketId: string;
   viewCount: bigint | null;
@@ -42,7 +38,7 @@ interface PollData {
 
 interface DiscoverFeedProps {
   feedMarkets: FeedMarket[];
-  gridMarkets: GridMarket[];
+  gridMarkets: FeedMarket[];
   pollData: PollData[];
   trendingIds: string[];
 }
@@ -70,15 +66,33 @@ export function DiscoverFeed({
   trendingIds,
 }: DiscoverFeedProps) {
   const [sheet, setSheet] = useState<SheetState>(CLOSED_SHEET);
+  const [activeIndex, setActiveIndex] = useState(0);
   const feedColumnRef = useRef<HTMLDivElement>(null);
 
-  const pollMap = new Map(
-    pollData.map((p) => ({
-      marketId: p.marketId,
-      viewCount: p.viewCount,
-      likeCount: p.likeCount,
-    })).map((p) => [p.marketId, p])
-  );
+  useEffect(() => {
+    const container = feedColumnRef.current;
+    if (!container) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const best = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (best) {
+          const idx = parseInt(best.target.getAttribute("data-index") ?? "0", 10);
+          setActiveIndex(idx);
+        }
+      },
+      { root: container, threshold: 0.7 }
+    );
+
+    const cards = container.querySelectorAll("[data-feed-card]");
+    cards.forEach((el) => observer.observe(el));
+
+    return () => observer.disconnect();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps — feedColumnRef is stable
+
+  const pollMap = new Map(pollData.map((p) => [p.marketId, p]));
 
   function openSheet(market: FeedMarket, initialOutcome?: number) {
     const prices = getMarketPrices(market);
@@ -89,10 +103,6 @@ export function DiscoverFeed({
       initialOutcome,
       title: market.title,
     });
-  }
-
-  function closeSheet() {
-    setSheet(CLOSED_SHEET);
   }
 
   return (
@@ -113,7 +123,7 @@ export function DiscoverFeed({
               : null;
 
           return (
-            <div key={market.id} className="snap-start h-screen">
+            <div key={market.id} className="snap-start h-screen" data-feed-card data-index={index}>
               <FeedCard
                 id={market.id}
                 title={market.title}
@@ -127,6 +137,7 @@ export function DiscoverFeed({
                 currentCount={currentCount}
                 isTrending={trendingIds.includes(market.id)}
                 priority={index < 2}
+                isActive={index === activeIndex}
                 onTap={(initialOutcome) => openSheet(market, initialOutcome)}
               />
             </div>
@@ -142,7 +153,7 @@ export function DiscoverFeed({
       {/* Bet sheet */}
       <BetSheet
         open={sheet.open}
-        onOpenChange={(v) => !v && closeSheet()}
+        onOpenChange={(v) => !v && setSheet(CLOSED_SHEET)}
         marketId={sheet.marketId}
         prices={sheet.prices}
         initialOutcome={sheet.initialOutcome}

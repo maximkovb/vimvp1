@@ -1,7 +1,7 @@
 ---
 title: "feat: Doomscroll Natural Video + Desktop Side HUD"
 type: feat
-status: active
+status: completed
 date: 2026-04-05
 origin: docs/brainstorms/2026-04-05-doomscroll-video-layout-requirements.md
 ---

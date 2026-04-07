@@ -330,7 +330,7 @@ export default function CreateMarketPage() {
         <input type="hidden" name="channelTitle" value={videoStats?.channelTitle ?? ""} />
         <input type="hidden" name="creatorId" value={videoStats?.creatorId ?? ""} />
         <input type="hidden" name="tikapiPostId" value={videoStats?.tikapiPostId ?? ""} />
-        <input type="hidden" name="videoDescription" value={videoStats?.description ?? ""} />
+        <input type="hidden" name="videoDescription" value="" />
         <input type="hidden" name="playUrl" value={videoStats?.playUrl ?? ""} />
         <input type="hidden" name="initialViewCount" value={videoStats?.viewCount ?? ""} />
         <input type="hidden" name="initialLikeCount" value={videoStats?.likeCount ?? ""} />

@@ -123,31 +123,34 @@ export async function getRecentActivity(): Promise<RecentActivityResult> {
   const userId = session.user.id;
 
   try {
-    const [user] = await db
-      .select({
-        loginStreak: users.loginStreak,
-        lastLoginReward: users.lastLoginReward,
-      })
-      .from(users)
-      .where(eq(users.id, userId))
-      .limit(1);
+    const [userRows, recentTransactions] = await Promise.all([
+      db
+        .select({
+          loginStreak: users.loginStreak,
+          lastLoginReward: users.lastLoginReward,
+        })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1),
+      db
+        .select({
+          id: coinTransactions.id,
+          amount: coinTransactions.amount,
+          type: coinTransactions.type,
+          referenceId: coinTransactions.referenceId,
+          createdAt: coinTransactions.createdAt,
+          marketTitle: markets.title,
+        })
+        .from(coinTransactions)
+        .leftJoin(markets, eq(coinTransactions.referenceId, markets.id))
+        .where(eq(coinTransactions.userId, userId))
+        .orderBy(desc(coinTransactions.createdAt))
+        .limit(5),
+    ]);
+
+    const [user] = userRows;
 
     if (!user) return { error: "User not found" };
-
-    const recentTransactions = await db
-      .select({
-        id: coinTransactions.id,
-        amount: coinTransactions.amount,
-        type: coinTransactions.type,
-        referenceId: coinTransactions.referenceId,
-        createdAt: coinTransactions.createdAt,
-        marketTitle: markets.title,
-      })
-      .from(coinTransactions)
-      .leftJoin(markets, eq(coinTransactions.referenceId, markets.id))
-      .where(eq(coinTransactions.userId, userId))
-      .orderBy(desc(coinTransactions.createdAt))
-      .limit(5);
 
     return {
       transactions: recentTransactions.map((t) => ({

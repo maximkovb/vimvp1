@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import type { UserPosition } from "@/lib/actions/trade";
+import { formatOutcome } from "@/lib/format";
 
 interface ResolutionRevealProps {
   /** 0 = YES resolved, 1 = NO resolved */
@@ -133,7 +134,7 @@ export function ResolutionReveal({
                 : `You lost ${Math.abs(Math.round(profit))} coins`}
             </p>
             <p className="text-xs text-muted mt-1">
-              {userPosition.outcome === 0 ? "YES" : "NO"} position ·{" "}
+              {formatOutcome(userPosition.outcome)} position ·{" "}
               {userPosition.shares.toFixed(2)} shares ·{" "}
               {(userPosition.avgCostBasis * 100).toFixed(1)}¢ avg entry
             </p>

@@ -36,7 +36,6 @@ export function SellButton({ marketId, outcome, maxShares }: SellButtonProps) {
         setError(result.error);
       } else {
         setShowModal(false);
-        mutate(`/api/markets/${marketId}`);
         mutate("/api/balance");
         router.refresh();
       }
@@ -55,8 +54,8 @@ export function SellButton({ marketId, outcome, maxShares }: SellButtonProps) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-card border border-border rounded-xl p-6 w-80">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50">
+      <div role="dialog" aria-modal="true" className="bg-card border border-border rounded-xl p-6 w-80">
         <h3 className="font-semibold mb-4">Sell Shares</h3>
         <div className="mb-3">
           <label className="text-xs text-muted">

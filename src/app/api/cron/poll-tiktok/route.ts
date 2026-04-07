@@ -29,6 +29,7 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const force = searchParams.get("force") === "true";
+  const debug = searchParams.get("debug") === "true";
 
   // Fetch active and halted TikTok markets only
   const activeMarkets = await db
@@ -61,19 +62,21 @@ export async function GET(request: Request) {
     : activeMarkets.filter((m) => shouldPoll(m, lastPollByMarket.get(m.id) ?? null));
 
   if (marketsToPoll.length === 0) {
-    // Debug: show why each market was skipped
-    const skipReasons = activeMarkets.map((m) => {
-      const lastPollAt = lastPollByMarket.get(m.id) ?? null;
-      const minsAgo = lastPollAt ? Math.round((Date.now() - lastPollAt.getTime()) / 60000) : null;
-      return {
-        id: m.id.slice(0, 8),
-        status: m.status,
-        hasResolvesAt: !!m.resolvesAt,
-        lastPollMinsAgo: minsAgo,
-        reason: !m.resolvesAt ? "no resolvesAt" : minsAgo !== null && minsAgo < 10 ? `only ${minsAgo}m ago` : "unknown",
-      };
-    });
-    return NextResponse.json({ polled: 0, skipped: activeMarkets.length, skipReasons });
+    const response: Record<string, unknown> = { polled: 0, skipped: activeMarkets.length };
+    if (debug) {
+      response.skipReasons = activeMarkets.map((m) => {
+        const lastPollAt = lastPollByMarket.get(m.id) ?? null;
+        const minsAgo = lastPollAt ? Math.round((Date.now() - lastPollAt.getTime()) / 60000) : null;
+        return {
+          id: m.id.slice(0, 8),
+          status: m.status,
+          hasResolvesAt: !!m.resolvesAt,
+          lastPollMinsAgo: minsAgo,
+          reason: !m.resolvesAt ? "no resolvesAt" : minsAgo !== null && minsAgo < 10 ? `only ${minsAgo}m ago` : "unknown",
+        };
+      });
+    }
+    return NextResponse.json(response);
   }
 
   let polledCount = 0;
@@ -95,23 +98,27 @@ export async function GET(request: Request) {
           viewCount: BigInt(stats.viewCount),
           likeCount: BigInt(stats.likeCount),
         });
-        details.push({ id: market.id.slice(0, 8), videoId: market.videoId, views: stats.viewCount, likes: stats.likeCount });
+        if (debug) details.push({ id: market.id.slice(0, 8), videoId: market.videoId, views: stats.viewCount, likes: stats.likeCount });
       } else {
         nullStatsCount++;
-        details.push({ id: market.id.slice(0, 8), videoId: market.videoId, views: null, likes: null });
+        if (debug) details.push({ id: market.id.slice(0, 8), videoId: market.videoId, views: null, likes: null });
       }
 
-      // Update videoMetadata thumbnail if TikTok CDN URL changed (signed URLs rotate).
-      // Only persist URLs from the known TikTok CDN domain to prevent injection.
-      if (stats?.thumbnailUrl && TIKTOK_THUMBNAIL_RE.test(stats.thumbnailUrl)) {
+      // Refresh videoMetadata thumbnail and playUrl on every poll — both are signed
+      // CDN URLs that expire (~24h for playUrl). Only persist thumbnail URLs from the
+      // known TikTok CDN domain to prevent injection.
+      if (stats) {
+        const base = market.videoMetadata ?? { title: "", thumbnail: "", channelTitle: "" };
+        const updates: typeof base = { ...base };
+        if (stats.thumbnailUrl && TIKTOK_THUMBNAIL_RE.test(stats.thumbnailUrl)) {
+          updates.thumbnail = stats.thumbnailUrl;
+        }
+        if (stats.playUrl) {
+          updates.playUrl = stats.playUrl;
+        }
         await db
           .update(markets)
-          .set({
-            videoMetadata: {
-              ...(market.videoMetadata ?? { title: "", channelTitle: "" }),
-              thumbnail: stats.thumbnailUrl,
-            },
-          })
+          .set({ videoMetadata: updates })
           .where(eq(markets.id, market.id));
       }
 
@@ -170,6 +177,6 @@ export async function GET(request: Request) {
     earlyResolved: earlyResolvedCount > 0 ? earlyResolvedCount : undefined,
     errors: errors.length > 0 ? errors : undefined,
     resolveErrors: resolveErrors.length > 0 ? resolveErrors : undefined,
-    details,
+    details: debug ? details : undefined,
   });
 }

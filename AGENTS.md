@@ -45,7 +45,79 @@ All routes use `Authorization: Bearer <CRON_SECRET>`.
 
 - `GET /api/markets/[id]` — returns full market state: `{ id, title, status, priceYes, priceNo,
   outcome, resolvesAt, resolvedAt, milestoneThreshold, priceHistory, recentTrades, pollHistory }`
+  `pollHistory` is an array of `{ viewCount, likeCount, polledAt }` entries.
   No auth required. Use to verify creation or monitor status/price changes.
 
 - `GET /api/markets` — returns all active/halted/resolving markets + last 6 resolved.
   No auth required. Response: `{ active: [...], resolved: [...] }`
+
+- `GET /api/leaderboard` — returns top 100 traders ranked by `totalValue`.
+  No auth required. Response: array of `{ rank, name, balance, openPositionsValue, totalValue }`.
+
+## Cron / Admin Endpoints
+
+- `GET /api/cron/resolve-markets` — triggers bulk market resolution for all markets past
+  their `resolvesAt` time.
+  Auth: `Authorization: Bearer <CRON_SECRET>`
+
+## User / Portfolio Endpoints
+
+> **Agent limitation:** The following endpoints use **session cookie auth** (NextAuth
+> `auth()`) and cannot be called with a Bearer token. Agents cannot access them directly —
+> they are browser-only (session cookie set by the sign-in flow is required).
+
+- `GET /api/portfolio` — auth: **session cookie only** (not bearer).
+  Returns: `{ balance, openValue, totalValue, loginStreak, positions, recentTrades }`
+  Each position includes: `positionId, marketId, marketTitle, marketStatus, outcome, shares,
+  avgCostBasis, currentPrice, markToMarket, pnl`.
+  Each recent trade includes: `id, marketId, marketTitle, outcome, shares, cost, priceBefore,
+  priceAfter, createdAt`.
+
+- `GET /api/balance` — auth: **session cookie only** (not bearer).
+  Returns: `{ balance, loginStreak, lastLoginReward }`
+
+## Trading
+
+### `POST /api/trades`
+
+Auth: `Authorization: Bearer <CRON_SECRET>`
+
+Buy or sell shares on behalf of the agent user (`AGENT_USER_ID` env var — must be set to the ID
+of a pre-created user row in the DB, or all requests return 501).
+
+**Buy shares** (spend coins, receive shares):
+```json
+{ "action": "buy", "marketId": "<id>", "outcome": 0, "amount": 100 }
+```
+`outcome`: `0` = YES, `1` = NO. `amount`: coins to spend (min 1).
+Response: `{ "success": true, "shares": 12.34, "cost": 99.98 }`
+
+**Sell shares** (return shares, receive coins):
+```json
+{ "action": "sell", "marketId": "<id>", "outcome": 0, "shares": 5.0 }
+```
+Response: `{ "success": true, "refund": 48.20 }`
+
+Error codes: `400` validation / trade too small / insufficient shares, `402` insufficient balance,
+`404` market or user not found, `409` market not active / no position / concurrent trade retry exhausted,
+`501` `AGENT_USER_ID` not configured.
+
+### `GET /api/markets/[id]/quote`
+
+No auth required. Returns a price quote for a hypothetical buy.
+
+Query params: `?outcome=0&amount=100` (both required; outcome must be 0 or 1; amount must be positive).
+
+Response:
+```json
+{
+  "shares": 12.34,
+  "cost": 99.98,
+  "avgPrice": 0.81,
+  "priceImpact": 0.03,
+  "currentPrice": 0.79,
+  "newPrice": 0.82
+}
+```
+
+Error codes: `400` invalid/missing params, `404` market not found, `409` market not active.

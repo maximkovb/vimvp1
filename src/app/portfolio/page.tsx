@@ -7,6 +7,7 @@ import { price } from "@/lib/lmsr";
 import Link from "next/link";
 import { SellButton } from "@/components/SellButton";
 import { DailyReward } from "@/components/DailyReward";
+import { formatOutcome } from "@/lib/format";
 
 export default async function PortfolioPage() {
   const session = await auth();
@@ -165,12 +166,12 @@ export default async function PortfolioPage() {
                       <td className="p-3 text-center">
                         <span
                           className={`px-1.5 py-0.5 rounded text-xs font-medium ${
-                            p.position.outcome === 1
+                            p.position.outcome === 0
                               ? "bg-green/10 text-green"
                               : "bg-red/10 text-red"
                           }`}
                         >
-                          {p.position.outcome === 1 ? "YES" : "NO"}
+                          {formatOutcome(p.position.outcome)}
                         </span>
                       </td>
                       <td className="p-3 text-right">
@@ -255,7 +256,7 @@ export default async function PortfolioPage() {
                           </Link>
                         </td>
                         <td className="p-3 text-center">
-                          {p.position.outcome === 1 ? "YES" : "NO"}
+                          {formatOutcome(p.position.outcome)}
                         </td>
                         <td className="p-3 text-center">
                           <span

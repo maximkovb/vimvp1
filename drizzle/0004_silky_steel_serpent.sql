@@ -1,0 +1,2 @@
+CREATE INDEX "price_snapshots_market_recorded_idx" ON "price_snapshots" USING btree ("market_id","recorded_at");--> statement-breakpoint
+CREATE INDEX "users_balance_idx" ON "users" USING btree ("balance");

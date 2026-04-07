@@ -26,7 +26,10 @@ export const users = pgTable("users", {
   failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
   lockedUntil: timestamp("locked_until", { mode: "date" }),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
-});
+},
+(table) => [
+  index("users_balance_idx").on(table.balance),
+]);
 
 export const usersRelations = relations(users, ({ many }) => ({
   accounts: many(accounts),
@@ -201,6 +204,7 @@ export const priceSnapshots = pgTable(
   (table) => [
     index("price_snapshots_market_id_idx").on(table.marketId),
     index("price_snapshots_recorded_at_idx").on(table.recordedAt),
+    index("price_snapshots_market_recorded_idx").on(table.marketId, table.recordedAt),
   ]
 );
 

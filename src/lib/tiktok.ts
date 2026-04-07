@@ -72,6 +72,7 @@ export async function fetchTikTokStatsById(
     creatorId:    d.author?.unique_id ?? "",
     thumbnailUrl: d.cover ?? "",
     tikapiPostId: d.id ?? videoId,
-    playUrl: d.play ?? "",
+    // Prefer no-watermark, fall back to HD then watermarked — some videos omit d.play
+    playUrl: d.play || d.hdplay || d.wmplay || "",
   };
 }

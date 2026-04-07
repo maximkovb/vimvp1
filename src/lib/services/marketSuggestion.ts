@@ -19,9 +19,7 @@ export type MarketSuggestionInput = {
 
 export type MarketSuggestionResult = {
   contract: ContractRecommendation | LLMContractRecommendation | null;
-  suggestedTitle: string | null;
   videoAgeHours: number;
-  subscriberCount: number;
   channelAvgViews: number;
   duplicateWarning: boolean;
 };
@@ -59,14 +57,12 @@ export async function computeMarketSuggestion(
   const duplicateWarning = existing.length > 0;
 
   const confidence = calculateConfidence(videoAgeHours, [], undefined, undefined);
-  const contract = calculateContractRecommendations(confidence, viewCount, videoAgeHours, [], viewCount);
+  const contract = calculateContractRecommendations(confidence, viewCount, videoAgeHours, [], 0);
 
   return {
     contract,
-    suggestedTitle: null,
     videoAgeHours,
-    subscriberCount: 0,
-    channelAvgViews: viewCount,
+    channelAvgViews: 0,
     duplicateWarning,
   };
 }

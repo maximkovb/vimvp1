@@ -44,6 +44,8 @@ export async function previewTrade(
   outcome: number,
   amount: number
 ): Promise<TradePreview | { error: string }> {
+  const session = await auth();
+  if (!session?.user?.id) return { error: "Not authenticated" };
   if (amount <= 0) return { error: "Amount must be positive" };
   if (outcome !== 0 && outcome !== 1) return { error: "Invalid outcome" };
 
@@ -233,6 +235,7 @@ export async function buyShares(
           marketId,
           priceYes: allP[0].toFixed(6),
           priceNo: allP[1].toFixed(6),
+          volumeTotal: sql`COALESCE((SELECT volume_total FROM price_snapshots WHERE market_id = ${marketId} ORDER BY recorded_at DESC LIMIT 1), 0) + ${actualCost.toFixed(2)}`,
         });
 
         return { success: true, shares, cost: actualCost };
@@ -259,7 +262,7 @@ export async function sellShares(
 ): Promise<{ success: true; refund: number } | { error: string }> {
   const session = await auth();
   if (!session?.user?.id) return { error: "Not authenticated" };
-  if (sharesToSell <= 0) return { error: "Must sell a positive number of shares" };
+  if (!isFinite(sharesToSell) || sharesToSell <= 0) return { error: "Must sell a positive number of shares" };
   if (outcome !== 0 && outcome !== 1) return { error: "Invalid outcome" };
 
   const userId = session.user.id;
@@ -377,6 +380,7 @@ export async function sellShares(
           marketId,
           priceYes: allP[0].toFixed(6),
           priceNo: allP[1].toFixed(6),
+          volumeTotal: sql`COALESCE((SELECT volume_total FROM price_snapshots WHERE market_id = ${marketId} ORDER BY recorded_at DESC LIMIT 1), 0) + ${refund.toFixed(2)}`,
         });
 
         return { success: true, refund };

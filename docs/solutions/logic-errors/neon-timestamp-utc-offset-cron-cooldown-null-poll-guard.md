@@ -110,6 +110,12 @@ for (const row of lastPollRows.rows as { market_id: string; last_polled_ms: stri
 `::bigint * 1000` gives milliseconds. `new Date(Number(ms))` constructs from a UTC epoch — no
 string parsing, no timezone ambiguity.
 
+> **Note:** The `ARRAY[...]` shown above uses `...` as a placeholder. In practice, passing a JS array
+> directly into a `sql` template tag (`` sql`... ANY(${ids})` ``) produces a row constructor
+> `($1,$2,$3)` which PostgreSQL's `ANY()` rejects. The correct construction is:
+> `` sql.join(ids.map(id => sql`${id}`), sql`, `) `` wrapped in `ARRAY[...]`.
+> See [drizzle-sql-tag-array-param-neon-http-driver.md](../database-issues/drizzle-sql-tag-array-param-neon-http-driver.md) for the full fix.
+
 ### Bug 2: Guard the insert on `stats !== null`
 
 **`src/app/api/cron/poll-tiktok/route.ts`**

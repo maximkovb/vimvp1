@@ -16,9 +16,11 @@ export async function signUp(formData: FormData) {
     return { error: "All fields are required" };
   }
 
-  if (password.length < 8) {
-    return { error: "Password must be at least 8 characters" };
-  }
+  if (name.length > 100) return { error: "Name is too long" };
+  if (email.length > 254 || !email.includes("@")) return { error: "Invalid email address" };
+  if (password.length < 8) return { error: "Password must be at least 8 characters" };
+  // bcryptjs silently truncates at 72 bytes — longer inputs add no security but enable DoS
+  if (password.length > 72) return { error: "Password must be 72 characters or fewer" };
 
   const passwordHash = await bcrypt.hash(password, 12);
   const userId = crypto.randomUUID();

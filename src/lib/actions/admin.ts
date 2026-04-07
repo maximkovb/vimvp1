@@ -70,7 +70,6 @@ export async function fetchVideoStats(url: string) {
     thumbnail: stats.thumbnailUrl,
     channelTitle: stats.creatorName,
     creatorId: stats.creatorId,
-    description: "",
     playUrl: stats.playUrl,
     viewCount: stats.viewCount,
     likeCount: stats.likeCount,
@@ -182,52 +181,58 @@ export async function createMarket(formData: FormData) {
   // Only persist thumbnails from known TikTok CDN URLs — rejects injected URLs.
   const thumbnail = TIKTOK_THUMBNAIL_RE.test(thumbnailRaw) ? thumbnailRaw : "";
 
+  // Only persist play URLs from known TikTok CDN domains — prevents SSRF.
+  const TIKTOK_PLAY_URL_RE = /^https:\/\/[a-z0-9-]+\.(tiktokcdn(?:-us)?|tiktokv)\.com\//;
+  const playUrl = playUrlRaw && TIKTOK_PLAY_URL_RE.test(playUrlRaw) ? playUrlRaw : undefined;
+
   const now = new Date();
-  const hours = resolutionHoursNum;
-  const resolvesAt = new Date(now.getTime() + hours * 60 * 60 * 1000);
+  const resolvesAt = new Date(now.getTime() + resolutionHoursNum * 60 * 60 * 1000);
   const haltsAt = new Date(resolvesAt.getTime() - 5 * 60 * 1000);
 
   const marketId = crypto.randomUUID();
+  const userId = session!.user!.id!;
 
-  await db.insert(markets).values({
-    id: marketId,
-    videoId,
-    ...(tikapiPostId ? { tikapiPostId } : {}),
-    title,
-    description: description || null,
-    questionType: validatedQuestionType,
-    milestoneThreshold: thresholdBigInt,
-    bParameter: b.toFixed(2),
-    status: publishImmediately ? "active" : "draft",
-    videoMetadata: {
-      title: videoTitle,
-      thumbnail,
-      channelTitle,
-      ...(creatorId ? { creatorId } : {}),
-      ...(videoDescription ? { description: videoDescription } : {}),
-      ...(playUrlRaw ? { playUrl: playUrlRaw } : {}),
-    },
-    opensAt: publishImmediately ? now : null,
-    haltsAt: publishImmediately ? haltsAt : null,
-    resolvesAt: publishImmediately ? resolvesAt : null,
-    createdBy: session!.user!.id!,
-  });
-
-  // Create initial price snapshot
-  if (publishImmediately) {
-    const prices = allPrices([0, 0], b);
-    await db.insert(priceSnapshots).values({
-      marketId,
-      priceYes: prices[0].toFixed(6),
-      priceNo: prices[1].toFixed(6),
+  // Wrap all three inserts atomically — a partial write would leave an orphaned market
+  // that the oracle would immediately mark as "failed" (no poll data).
+  await db.transaction(async (tx) => {
+    await tx.insert(markets).values({
+      id: marketId,
+      videoId,
+      ...(tikapiPostId ? { tikapiPostId } : {}),
+      title,
+      description: description || null,
+      questionType: validatedQuestionType,
+      milestoneThreshold: thresholdBigInt,
+      bParameter: b.toFixed(2),
+      status: publishImmediately ? "active" : "draft",
+      videoMetadata: {
+        title: videoTitle,
+        thumbnail,
+        channelTitle,
+        ...(creatorId ? { creatorId } : {}),
+        ...(videoDescription ? { description: videoDescription } : {}),
+        ...(playUrl ? { playUrl } : {}),
+      },
+      opensAt: publishImmediately ? now : null,
+      haltsAt: publishImmediately ? haltsAt : null,
+      resolvesAt: publishImmediately ? resolvesAt : null,
+      createdBy: userId,
     });
-  }
 
-  // Insert initial poll row with the already-validated view/like counts.
-  await db.insert(tiktokPolls).values({
-    marketId,
-    viewCount: BigInt(initialViewCount),
-    likeCount: BigInt(initialLikeCount),
+    if (publishImmediately) {
+      const prices = allPrices([0, 0], b);
+      await tx.insert(priceSnapshots).values({
+        marketId,
+        priceYes: prices[0].toFixed(6),
+        priceNo: prices[1].toFixed(6),
+      });
+    }
+
+    await tx.insert(tiktokPolls).values({
+      marketId,
+      viewCount: BigInt(initialViewCount),
+      likeCount: BigInt(initialLikeCount),
+    });
   });
 
   revalidatePath("/");
@@ -443,16 +448,21 @@ export async function resolveNow(marketId: string) {
 
   if (!market) return { error: "Market not found" };
 
-  const finalStatuses = ["resolved", "cancelled"];
-  if (finalStatuses.includes(market.status)) {
+  if (market.status === "resolved" || market.status === "cancelled") {
     return { error: `Market is already ${market.status}` };
   }
 
-  // Transition to "resolving" so the oracle's idempotency guard passes
-  await db
+  // Atomic status transition — .returning() acts as a distributed lock.
+  // If 0 rows are returned, the cron already moved the market; we abort.
+  const [updated] = await db
     .update(markets)
     .set({ status: "resolving" })
-    .where(and(eq(markets.id, marketId), eq(markets.status, market.status)));
+    .where(and(eq(markets.id, marketId), eq(markets.status, market.status)))
+    .returning({ id: markets.id });
+
+  if (!updated) {
+    return { error: "Market status changed concurrently — please refresh and try again" };
+  }
 
   try {
     await resolveMarket(marketId);

@@ -5,6 +5,7 @@ import { Drawer } from "vaul";
 import useSWR from "swr";
 import { marketFetcher } from "@/lib/market-fetcher";
 import { TradePanel, type TradeResult } from "./TradePanel";
+import { formatOutcome } from "@/lib/format";
 import { PriceChart } from "./PriceChart";
 import { SellButton } from "./SellButton";
 import type { MarketData } from "@/types/market";
@@ -124,7 +125,7 @@ export function BetSheet({
             {position !== null && (
               <div className="border-t border-border pt-4">
                 <p className="text-xs text-muted mb-2">
-                  Your position: {position.outcome === 0 ? "YES" : "NO"} —{" "}
+                  Your position: {formatOutcome(position.outcome)} —{" "}
                   {position.shares.toFixed(1)} shares
                 </p>
                 <SellButton

@@ -19,7 +19,7 @@ export async function GET() {
     .orderBy(desc(users.balance))
     .limit(TOP_N);
 
-  const topUserIds = topUsers.map((u) => u.id);
+  const topUserIds = topUsers.map((u) => u.id!);
 
   const allPositions =
     topUserIds.length > 0
@@ -49,7 +49,7 @@ export async function GET() {
 
   const ranked = topUsers
     .map((user) => {
-      const userPositions = positionsByUser.get(user.id) ?? [];
+      const userPositions = positionsByUser.get(user.id!) ?? [];
       let positionsValue = 0;
       for (const pos of userPositions) {
         if (pos.marketStatus === "resolved") continue;
@@ -59,7 +59,6 @@ export async function GET() {
       const balance = parseFloat(user.balance);
       const totalValue = balance + positionsValue;
       return {
-        id: user.id,
         name: user.name ?? "Anonymous",
         balance,
         positionsValue,
@@ -67,7 +66,8 @@ export async function GET() {
         loginStreak: user.loginStreak,
       };
     })
-    .sort((a, b) => b.totalValue - a.totalValue);
+    .sort((a, b) => b.totalValue - a.totalValue)
+    .map((entry, i) => ({ rank: i + 1, ...entry }));
 
   return NextResponse.json({ traders: ranked });
 }

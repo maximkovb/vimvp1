@@ -8,10 +8,11 @@ import {
   manualResolve,
   resolveNow,
 } from "@/lib/actions/admin";
+import type { MarketStatus } from "@/db/schema";
 
 interface Props {
   marketId: string;
-  status: string;
+  status: MarketStatus;
 }
 
 export function AdminMarketActions({ marketId, status }: Props) {
@@ -74,7 +75,7 @@ export function AdminMarketActions({ marketId, status }: Props) {
           <button
             onClick={() => {
               if (confirm("Resolve as YES?")) {
-                handleAction(() => manualResolve(marketId, 1));
+                handleAction(() => manualResolve(marketId, 0));
               }
             }}
             disabled={isPending}
@@ -85,7 +86,7 @@ export function AdminMarketActions({ marketId, status }: Props) {
           <button
             onClick={() => {
               if (confirm("Resolve as NO?")) {
-                handleAction(() => manualResolve(marketId, 0));
+                handleAction(() => manualResolve(marketId, 1));
               }
             }}
             disabled={isPending}

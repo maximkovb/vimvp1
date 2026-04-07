@@ -5,7 +5,6 @@ import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { allPrices } from "@/lib/lmsr";
 import { MarketLiveData } from "@/components/MarketLiveData";
-import { MarketHUD } from "@/components/MarketHUD";
 import { LiveEngagementStats } from "@/components/LiveEngagementStats";
 import { VideoDescription } from "@/components/VideoDescription";
 import { TikTokEmbed } from "@/components/TikTokEmbed";
@@ -96,19 +95,16 @@ export default async function MarketPage({
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
-      {/* Page title */}
-      <h1 className="text-2xl font-bold mb-6">{market.title}</h1>
-
-      {/* Main two-column section: video left + HUD right */}
-      <div className="flex flex-col lg:flex-row gap-6 items-start mb-8">
-        {/* Left column: TikTok video + creator card + description */}
-        <div className="w-full lg:w-[360px] flex-shrink-0 space-y-4">
+      <div className="flex flex-col lg:flex-row gap-6 items-start">
+        {/* Left column: TikTok embed + creator card */}
+        <div className="w-full lg:w-[325px] flex-shrink-0 space-y-4">
+          {/* TikTok vertical embed */}
           <TikTokEmbed
             videoId={market.videoId}
             title={videoMetadata?.title || market.title}
-            playUrl={videoMetadata?.playUrl}
             thumbnail={videoMetadata?.thumbnail}
             creatorId={videoMetadata?.creatorId}
+            isActive={true}
           />
 
           {/* Creator card */}
@@ -144,14 +140,11 @@ export default async function MarketPage({
           )}
         </div>
 
-        {/* Right column: sticky HUD */}
-        <div className="w-full lg:flex-1 lg:max-w-[400px] lg:sticky lg:top-4">
-          <MarketHUD marketId={id} session={session} initialData={initialData} />
+        {/* Right column: market trading interface */}
+        <div className="flex-1 min-w-0">
+          <MarketLiveData marketId={id} session={session} initialData={initialData} />
         </div>
       </div>
-
-      {/* Full-width stats section */}
-      <MarketLiveData marketId={id} initialData={initialData} />
     </div>
   );
 }

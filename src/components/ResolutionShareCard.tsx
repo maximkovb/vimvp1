@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { UserPosition } from "@/lib/actions/trade";
+import { formatOutcome } from "@/lib/format";
 
 interface ResolutionShareCardProps {
   marketTitle: string;
@@ -37,7 +38,7 @@ export function ResolutionShareCard({
     const url = window.location.href;
     const resultText = userWon
       ? `I won +${payout} coins on Virality! "${truncatedTitle}"`
-      : `I bet ${userPosition.outcome === 0 ? "YES" : "NO"} on "${truncatedTitle}" — it resolved ${yesWon ? "YES" : "NO"}.`;
+      : `I bet ${formatOutcome(userPosition.outcome)} on "${truncatedTitle}" — it resolved ${yesWon ? "YES" : "NO"}.`;
     try {
       await navigator.share({ url, text: resultText });
     } catch (err) {
@@ -90,7 +91,7 @@ export function ResolutionShareCard({
             <span
               className={`font-bold ${userPosition.outcome === 0 ? "text-green" : "text-red"}`}
             >
-              {userPosition.outcome === 0 ? "YES" : "NO"}
+              {formatOutcome(userPosition.outcome)}
             </span>
           </div>
           <div className="flex justify-between">

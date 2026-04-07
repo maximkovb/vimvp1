@@ -4,6 +4,7 @@ import { eq, desc } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import { formatOutcome } from "@/lib/format";
 
 export default async function HistoryPage() {
   const session = await auth();
@@ -20,7 +21,7 @@ export default async function HistoryPage() {
     .innerJoin(markets, eq(trades.marketId, markets.id))
     .where(eq(trades.userId, userId))
     .orderBy(desc(trades.createdAt))
-    .limit(500);
+    .limit(100);
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6">
@@ -82,12 +83,12 @@ export default async function HistoryPage() {
                       <td className="p-3 text-center">
                         <span
                           className={`px-1.5 py-0.5 rounded text-xs font-medium ${
-                            t.trade.outcome === 1
+                            t.trade.outcome === 0
                               ? "bg-green/10 text-green"
                               : "bg-red/10 text-red"
                           }`}
                         >
-                          {t.trade.outcome === 1 ? "YES" : "NO"}
+                          {formatOutcome(t.trade.outcome)}
                         </span>
                       </td>
                       <td className="p-3 text-right">
