@@ -2,7 +2,7 @@
 
 import { db } from "@/db";
 import { users, markets, coinTransactions } from "@/db/schema";
-import { eq, sql, desc } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 import { creditBalance } from "@/lib/services/ledger";

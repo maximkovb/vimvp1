@@ -1,4 +1,4 @@
-import { positions, users, coinTransactions } from "@/db/schema";
+import { positions, coinTransactions } from "@/db/schema";
 import { eq, and, ne, sql } from "drizzle-orm";
 import type { db } from "@/db";
 
