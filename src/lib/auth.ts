@@ -3,12 +3,14 @@ import Google from "next-auth/providers/google";
 import Credentials from "next-auth/providers/credentials";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import { db } from "@/db";
-import { users, accounts, verificationTokens, coinTransactions } from "@/db/schema";
+import { users, accounts, verificationTokens } from "@/db/schema";
 import { eq, sql } from "drizzle-orm";
 import bcrypt from "bcryptjs";
+import { creditBalance } from "@/lib/services/ledger";
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_MINUTES = 15;
+const STARTING_BALANCE = 1000;
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: DrizzleAdapter(db, {
@@ -103,16 +105,26 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   events: {
     async createUser({ user }) {
       if (!user.id) return;
-      // Only insert if no signup_bonus exists yet (idempotent)
+      // Credit starting balance inside a transaction with FOR UPDATE + ledger snapshot.
+      // The partial unique index on (user_id) WHERE type='signup_bonus' prevents duplicates at DB level.
       try {
-        await db.insert(coinTransactions).values({
-          userId: user.id,
-          amount: "1000.00",
-          type: "signup_bonus",
-          referenceId: user.id,
+        await db.transaction(async (tx) => {
+          await creditBalance(tx, user.id!, STARTING_BALANCE, "signup_bonus", {
+            referenceId: user.id,
+          });
         });
-      } catch {
-        // Unique constraint violation = already awarded (idempotent)
+      } catch (err: unknown) {
+        // Unique constraint violation = already awarded (idempotent — DB-enforced)
+        if (
+          typeof err === "object" &&
+          err !== null &&
+          "code" in err &&
+          (err as { code: string }).code === "23505"
+        ) {
+          return;
+        }
+        // Log unexpected errors instead of silently swallowing them
+        console.error("[auth] Failed to credit OAuth signup bonus for user", user.id, err);
       }
     },
   },

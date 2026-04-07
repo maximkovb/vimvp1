@@ -7,6 +7,7 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 /**
  * Distribute payouts to winning positions for a resolved market.
  * Must be called within a transaction.
+ * Idempotent: skips users who already have a payout coinTransaction for this market.
  */
 export async function distributePayout(tx: Tx, marketId: string, outcome: number) {
   const winningPositions = await tx
@@ -41,8 +42,8 @@ export async function distributePayout(tx: Tx, marketId: string, outcome: number
     payout: parseFloat(p.shares).toFixed(2),
   }));
 
-  // Bulk UPDATE users balance using a VALUES CTE
-  await tx.execute(sql`
+  // Bulk UPDATE users balance and capture balance_before/after using RETURNING
+  const updated = await tx.execute<{ id: string; balance_before: string; balance_after: string }>(sql`
     UPDATE users u
     SET balance = (u.balance::numeric + v.payout)::numeric
     FROM (VALUES ${sql.join(
@@ -50,16 +51,33 @@ export async function distributePayout(tx: Tx, marketId: string, outcome: number
       sql`, `
     )}) AS v(user_id, payout)
     WHERE u.id = v.user_id
+    RETURNING u.id,
+      (u.balance - v.payout)::numeric AS balance_before,
+      u.balance::numeric AS balance_after
   `);
 
-  // Bulk INSERT coin transactions (one row per winner)
+  // Build a lookup from userId → snapshots
+  const snapshots = new Map(
+    updated.rows.map((r) => [r.id, { before: r.balance_before, after: r.balance_after }])
+  );
+
+  // Bulk INSERT coin transactions with balance snapshots
   await tx.execute(sql`
-    INSERT INTO coin_transactions (id, user_id, amount, type, reference_id, created_at)
+    INSERT INTO coin_transactions (id, user_id, amount, balance_before, balance_after, type, reference_id, created_at)
     VALUES ${sql.join(
-      payoutValues.map(
-        (p) =>
-          sql`(gen_random_uuid(), ${p.userId}, ${p.payout}::numeric, 'payout', ${marketId}, NOW())`
-      ),
+      payoutValues.map((p) => {
+        const snap = snapshots.get(p.userId);
+        return sql`(
+          gen_random_uuid(),
+          ${p.userId},
+          ${p.payout}::numeric,
+          ${snap?.before ?? "0"}::numeric,
+          ${snap?.after ?? p.payout}::numeric,
+          'payout',
+          ${marketId},
+          NOW()
+        )`;
+      }),
       sql`, `
     )}
   `);
@@ -68,17 +86,28 @@ export async function distributePayout(tx: Tx, marketId: string, outcome: number
 /**
  * Refund all positions in a cancelled market at cost basis.
  * Must be called within a transaction.
+ * Idempotent: skips users who already have a refund coinTransaction for this market.
  */
 export async function refundPositions(tx: Tx, marketId: string) {
   const allPos = await tx
     .select()
     .from(positions)
-    .where(
-      and(eq(positions.marketId, marketId), ne(positions.shares, "0"))
-    );
+    .where(and(eq(positions.marketId, marketId), ne(positions.shares, "0")));
 
-  // Only process positions with a positive refund amount
+  // Idempotency check: skip users already refunded (mirrors distributePayout pattern)
+  const existingRefunds = await tx
+    .select({ userId: coinTransactions.userId })
+    .from(coinTransactions)
+    .where(
+      and(
+        eq(coinTransactions.referenceId, marketId),
+        eq(coinTransactions.type, "refund")
+      )
+    );
+  const alreadyRefunded = new Set(existingRefunds.map((e) => e.userId));
+
   const toRefund = allPos
+    .filter((p) => !alreadyRefunded.has(p.userId))
     .map((p) => ({
       id: p.id,
       userId: p.userId,
@@ -88,8 +117,8 @@ export async function refundPositions(tx: Tx, marketId: string) {
 
   if (toRefund.length === 0) return;
 
-  // Bulk UPDATE users balance using a VALUES CTE
-  await tx.execute(sql`
+  // Bulk UPDATE users balance and capture balance_before/after using RETURNING
+  const updated = await tx.execute<{ id: string; balance_before: string; balance_after: string }>(sql`
     UPDATE users u
     SET balance = (u.balance::numeric + v.refund)::numeric
     FROM (VALUES ${sql.join(
@@ -97,16 +126,32 @@ export async function refundPositions(tx: Tx, marketId: string) {
       sql`, `
     )}) AS v(user_id, refund)
     WHERE u.id = v.user_id
+    RETURNING u.id,
+      (u.balance - v.refund)::numeric AS balance_before,
+      u.balance::numeric AS balance_after
   `);
 
-  // Bulk INSERT coin transactions (one row per refunded position)
+  const snapshots = new Map(
+    updated.rows.map((r) => [r.id, { before: r.balance_before, after: r.balance_after }])
+  );
+
+  // Bulk INSERT coin transactions with balance snapshots
   await tx.execute(sql`
-    INSERT INTO coin_transactions (id, user_id, amount, type, reference_id, created_at)
+    INSERT INTO coin_transactions (id, user_id, amount, balance_before, balance_after, type, reference_id, created_at)
     VALUES ${sql.join(
-      toRefund.map(
-        (p) =>
-          sql`(gen_random_uuid(), ${p.userId}, ${p.refundAmount}::numeric, 'refund', ${marketId}, NOW())`
-      ),
+      toRefund.map((p) => {
+        const snap = snapshots.get(p.userId);
+        return sql`(
+          gen_random_uuid(),
+          ${p.userId},
+          ${p.refundAmount}::numeric,
+          ${snap?.before ?? "0"}::numeric,
+          ${snap?.after ?? p.refundAmount}::numeric,
+          'refund',
+          ${marketId},
+          NOW()
+        )`;
+      }),
       sql`, `
     )}
   `);

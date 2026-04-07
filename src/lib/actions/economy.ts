@@ -1,10 +1,12 @@
 "use server";
 
 import { db } from "@/db";
-import { users, coinTransactions } from "@/db/schema";
-import { eq, sql } from "drizzle-orm";
+import { users, markets, coinTransactions } from "@/db/schema";
+import { eq, sql, desc } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
+import { creditBalance } from "@/lib/services/ledger";
+import type { CoinTransactionType } from "@/db/schema";
 
 const BASE_DAILY_REWARD = 50;
 const STREAK_BONUS_PER_DAY = 10;
@@ -23,6 +25,7 @@ export async function claimDailyReward(): Promise<ClaimResult> {
   const userId = session.user.id;
 
   const result = await db.transaction(async (tx) => {
+    // Lock the user row for the entire transaction (date check + balance update must be atomic)
     const [user] = await tx
       .select()
       .from(users)
@@ -43,7 +46,6 @@ export async function claimDailyReward(): Promise<ClaimResult> {
         ))
       : null;
 
-    // Check if already claimed today
     if (lastRewardUTC && lastRewardUTC.getTime() === todayUTC.getTime()) {
       return { error: "Already claimed today", alreadyClaimed: true } as const;
     }
@@ -58,30 +60,18 @@ export async function claimDailyReward(): Promise<ClaimResult> {
       }
     }
 
-    // Calculate reward
-    const streakBonus = Math.min(
-      (newStreak - 1) * STREAK_BONUS_PER_DAY,
-      MAX_STREAK_BONUS
-    );
+    const streakBonus = Math.min((newStreak - 1) * STREAK_BONUS_PER_DAY, MAX_STREAK_BONUS);
     const totalReward = BASE_DAILY_REWARD + streakBonus;
+    const referenceId = todayUTC.toISOString().slice(0, 10); // UTC date string — must stay UTC (idempotency key)
 
-    // Atomic balance update + streak info
+    // Credit balance with ledger snapshot (creditBalance's FOR UPDATE is a no-op — row already locked above)
+    await creditBalance(tx, userId, totalReward, "daily_login", { referenceId });
+
+    // Update streak + lastLoginReward separately (creditBalance only touches balance)
     await tx
       .update(users)
-      .set({
-        balance: sql`${users.balance} + ${totalReward.toFixed(2)}`,
-        loginStreak: newStreak,
-        lastLoginReward: now,
-      })
+      .set({ loginStreak: newStreak, lastLoginReward: now })
       .where(eq(users.id, userId));
-
-    // Log daily reward (single entry for total)
-    await tx.insert(coinTransactions).values({
-      userId,
-      amount: totalReward.toFixed(2),
-      type: "daily_login",
-      referenceId: todayUTC.toISOString().slice(0, 10),
-    });
 
     return {
       success: true as const,
@@ -97,4 +87,72 @@ export async function claimDailyReward(): Promise<ClaimResult> {
   }
 
   return result;
+}
+
+export type RecentActivityResult =
+  | {
+      transactions: Array<{
+        id: string;
+        amount: number;
+        type: CoinTransactionType;
+        marketTitle: string | null;
+        createdAt: Date;
+      }>;
+      loginStreak: number;
+      lastLoginReward: Date | null;
+    }
+  | { error: string };
+
+export async function getRecentActivity(): Promise<RecentActivityResult> {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return { error: "Not authenticated" };
+  }
+
+  const userId = session.user.id;
+
+  try {
+    const [userRows, recentTransactions] = await Promise.all([
+      db
+        .select({
+          loginStreak: users.loginStreak,
+          lastLoginReward: users.lastLoginReward,
+        })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1),
+      db
+        .select({
+          id: coinTransactions.id,
+          amount: coinTransactions.amount,
+          type: coinTransactions.type,
+          referenceId: coinTransactions.referenceId,
+          createdAt: coinTransactions.createdAt,
+          marketTitle: markets.title,
+        })
+        .from(coinTransactions)
+        .leftJoin(markets, eq(coinTransactions.referenceId, markets.id))
+        .where(eq(coinTransactions.userId, userId))
+        .orderBy(desc(coinTransactions.createdAt))
+        .limit(5),
+    ]);
+
+    const [user] = userRows;
+
+    if (!user) return { error: "User not found" };
+
+    return {
+      transactions: recentTransactions.map((t) => ({
+        id: t.id,
+        amount: parseFloat(t.amount),
+        type: t.type,
+        marketTitle: t.marketTitle ?? null,
+        createdAt: t.createdAt,
+      })),
+      loginStreak: user.loginStreak,
+      lastLoginReward: user.lastLoginReward,
+    };
+  } catch {
+    return { error: "Failed to load activity" };
+  }
 }

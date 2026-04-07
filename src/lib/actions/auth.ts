@@ -1,11 +1,12 @@
 "use server";
 
 import { db } from "@/db";
-import { users, coinTransactions } from "@/db/schema";
+import { users } from "@/db/schema";
 import bcrypt from "bcryptjs";
 import { signIn } from "@/lib/auth";
+import { creditBalance } from "@/lib/services/ledger";
 
-const STARTING_BALANCE = "1000";
+const STARTING_BALANCE = 1000;
 
 export async function signUp(formData: FormData) {
   const name = formData.get("name") as string;
@@ -16,34 +17,23 @@ export async function signUp(formData: FormData) {
     return { error: "All fields are required" };
   }
 
-  if (password.length < 8) {
-    return { error: "Password must be at least 8 characters" };
-  }
+  if (name.length > 100) return { error: "Name is too long" };
+  if (email.length > 254 || !email.includes("@")) return { error: "Invalid email address" };
+  if (password.length < 8) return { error: "Password must be at least 8 characters" };
+  if (password.length > 72) return { error: "Password must be 72 characters or fewer" };
 
   const passwordHash = await bcrypt.hash(password, 12);
   const userId = crypto.randomUUID();
 
   try {
     await db.transaction(async (tx) => {
-      // Create user with starting balance
-      await tx.insert(users).values({
-        id: userId,
-        name,
-        email,
-        passwordHash,
-        balance: STARTING_BALANCE,
-      });
+      // Insert user with balance=0 (default); creditBalance will set it to STARTING_BALANCE
+      await tx.insert(users).values({ id: userId, name, email, passwordHash });
 
-      // Log signup bonus
-      await tx.insert(coinTransactions).values({
-        userId,
-        amount: STARTING_BALANCE,
-        type: "signup_bonus",
-        referenceId: userId,
-      });
+      // Credit starting balance via ledger — acquires FOR UPDATE, writes snapshot, prevents duplicates
+      await creditBalance(tx, userId, STARTING_BALANCE, "signup_bonus", { referenceId: userId });
     });
   } catch (err: unknown) {
-    // Postgres unique constraint violation
     if (
       typeof err === "object" &&
       err !== null &&
@@ -55,13 +45,8 @@ export async function signUp(formData: FormData) {
     throw err;
   }
 
-  // Auto sign in after registration
   try {
-    await signIn("credentials", {
-      email,
-      password,
-      redirect: false,
-    });
+    await signIn("credentials", { email, password, redirect: false });
   } catch {
     // Sign-in after registration may throw a redirect — that's OK
   }
