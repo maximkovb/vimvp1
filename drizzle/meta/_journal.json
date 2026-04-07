@@ -15,6 +15,20 @@
       "when": 1774221842965,
       "tag": "0001_luxuriant_chat",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1775589344318,
+      "tag": "0002_amusing_slyde",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1775589411771,
+      "tag": "0003_breezy_thunderball",
+      "breakpoints": true
     }
   ]
 }

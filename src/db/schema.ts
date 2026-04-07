@@ -20,7 +20,7 @@ export const users = pgTable("users", {
   emailVerified: timestamp("email_verified", { mode: "date" }),
   passwordHash: text("password_hash"),
   image: text("image"),
-  balance: decimal("balance", { precision: 12, scale: 2 }).notNull().default("1000"),
+  balance: decimal("balance", { precision: 12, scale: 2 }).notNull().default("0"),
   loginStreak: integer("login_streak").notNull().default(0),
   lastLoginReward: timestamp("last_login_reward", { mode: "date" }),
   failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
@@ -241,8 +241,12 @@ export const coinTransactions = pgTable(
     id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
     userId: text("user_id").notNull().references(() => users.id),
     amount: decimal("amount", { precision: 12, scale: 2 }).notNull(),
+    balanceBefore: decimal("balance_before", { precision: 12, scale: 2 }).notNull(),
+    balanceAfter: decimal("balance_after", { precision: 12, scale: 2 }).notNull(),
     type: text("type").$type<CoinTransactionType>().notNull(),
-    referenceId: text("reference_id"), // market_id or trade_id
+    referenceId: text("reference_id"), // tradeId for 'trade', marketId for payout/refund, date for daily_login, userId for signup_bonus
+    // FK to trades — only for 'trade' type; referenceId still holds tradeId for the unique index
+    tradeId: text("trade_id").references(() => trades.id),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
   },
   (table) => [
@@ -253,9 +257,12 @@ export const coinTransactions = pgTable(
       table.referenceId,
       table.type
     ),
+    // Partial unique index enforced via raw SQL migration — prevents duplicate signup bonuses at DB level
+    // CREATE UNIQUE INDEX coin_transactions_signup_bonus_per_user_idx ON coin_transactions (user_id) WHERE type = 'signup_bonus'
   ]
 );
 
 export const coinTransactionsRelations = relations(coinTransactions, ({ one }) => ({
   user: one(users, { fields: [coinTransactions.userId], references: [users.id] }),
+  trade: one(trades, { fields: [coinTransactions.tradeId], references: [trades.id] }),
 }));
