@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { MarketCard } from "./MarketCard";
 import { getMarketPrices } from "@/lib/market-utils";
 import type { MarketStatus, QuestionType } from "@/db/schema";
@@ -34,7 +35,7 @@ export function FeedEndGrid({ gridMarkets }: FeedEndGridProps) {
 
   return (
     <div className="px-4 py-8">
-      <h2 className="text-lg font-semibold mb-4 text-foreground">All Markets</h2>
+      <h2 className="text-lg font-semibold mb-4 text-foreground">Active Markets</h2>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         {gridMarkets.map((market) => {
           const prices = getMarketPrices(market);
@@ -54,6 +55,11 @@ export function FeedEndGrid({ gridMarkets }: FeedEndGridProps) {
             />
           );
         })}
+      </div>
+      <div className="mt-4 text-center">
+        <Link href="/resolved" className="text-sm text-accent hover:underline">
+          View resolved markets →
+        </Link>
       </div>
     </div>
   );

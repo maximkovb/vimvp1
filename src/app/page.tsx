@@ -4,27 +4,19 @@ import { desc, eq, or, sql } from "drizzle-orm";
 import { DiscoverFeed } from "@/components/DiscoverFeed";
 
 export default async function HomePage() {
-  // Fetch active/halted/resolving + recently resolved markets in parallel
-  const [activeMarkets, resolvedMarkets] = await Promise.all([
-    db
-      .select()
-      .from(markets)
-      .where(
-        or(
-          eq(markets.status, "active"),
-          eq(markets.status, "halted"),
-          eq(markets.status, "resolving")
-        )
+  // Fetch active/halted/resolving markets — resolved markets live at /resolved
+  const activeMarkets = await db
+    .select()
+    .from(markets)
+    .where(
+      or(
+        eq(markets.status, "active"),
+        eq(markets.status, "halted"),
+        eq(markets.status, "resolving")
       )
-      .orderBy(desc(markets.createdAt))
-      .limit(50),
-    db
-      .select()
-      .from(markets)
-      .where(eq(markets.status, "resolved"))
-      .orderBy(desc(markets.resolvedAt))
-      .limit(12),
-  ]);
+    )
+    .orderBy(desc(markets.createdAt))
+    .limit(50);
 
   // Split feed order: resolving-soon cards first, then active
   const resolvingSoon = activeMarkets.filter(
@@ -57,8 +49,8 @@ export default async function HomePage() {
   // Trending: top 3 most-recently-created active markets
   const trendingIds = mainMarkets.slice(0, 3).map((m) => m.id);
 
-  // Grid overview shows all markets (active + resolved)
-  const gridMarkets = [...activeMarkets, ...resolvedMarkets];
+  // Grid overview shows active/halted/resolving markets only
+  const gridMarkets = [...resolvingSoon, ...mainMarkets];
 
   return (
     <DiscoverFeed
