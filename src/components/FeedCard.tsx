@@ -1,11 +1,16 @@
 "use client";
 
 import Image from "next/image";
-import { useState, useRef } from "react";
+import { useState, useRef, forwardRef, useImperativeHandle } from "react";
 import { TIKTOK_THUMBNAIL_RE } from "@/lib/constants";
 import { TikTokEmbed } from "./TikTokEmbed";
 import { TradePanel } from "./TradePanel";
 import type { MarketStatus, QuestionType } from "@/db/schema";
+
+export interface FeedCardHandle {
+  activate(): void;
+  deactivate(): void;
+}
 
 interface FeedCardProps {
   id: string;
@@ -120,7 +125,7 @@ function PlayIcon() {
   );
 }
 
-export function FeedCard({
+export const FeedCard = forwardRef<FeedCardHandle, FeedCardProps>(function FeedCard({
   id,
   title,
   status,
@@ -134,12 +139,34 @@ export function FeedCard({
   isTrending,
   priority = false,
   onTap,
-}: FeedCardProps) {
+}: FeedCardProps, ref) {
   const [currentPlayUrl, setCurrentPlayUrl] = useState(videoMetadata?.playUrl ?? null);
   const [isMuted, setIsMuted] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  useImperativeHandle(ref, () => ({
+    activate() {
+      const v = videoRef.current;
+      if (!v) return;
+      v.muted = false;
+      setIsMuted(false);
+      v.play().catch(() => {
+        // Autoplay policy blocked unmuted play — fall back to muted
+        v.muted = true;
+        setIsMuted(true);
+        v.play().catch(() => {});
+      });
+    },
+    deactivate() {
+      const v = videoRef.current;
+      if (!v) return;
+      v.pause();
+      v.muted = true;
+      setIsMuted(true);
+    },
+  }));
 
   const thumbnailSrc =
     videoMetadata?.thumbnail && TIKTOK_THUMBNAIL_RE.test(videoMetadata.thumbnail)
@@ -185,6 +212,7 @@ export function FeedCard({
   return (
     <div className="relative w-full h-full overflow-hidden bg-background">
       {/* ── DESKTOP LAYOUT (≥1024px) ─────────────────────────────────────── */}
+      {/* TODO(desktop): wire IO control once TikTokEmbed exposes forwardRef */}
       <div className="hidden lg:flex flex-row h-full items-center justify-center gap-8 px-12">
         {/* Left: 9:16 video via TikTokEmbed */}
         <div className="w-[325px] flex-shrink-0">
@@ -252,10 +280,10 @@ export function FeedCard({
               key={currentPlayUrl}
               src={currentPlayUrl}
               poster={thumbnailSrc ?? undefined}
-              autoPlay
               muted
               loop
               playsInline
+              preload="metadata"
               className="absolute inset-0 w-full h-full object-cover"
               onClick={(e) => { e.stopPropagation(); togglePause(); }}
               onError={handleVideoError}
@@ -368,4 +396,4 @@ export function FeedCard({
       </div>
     </div>
   );
-}
+});
