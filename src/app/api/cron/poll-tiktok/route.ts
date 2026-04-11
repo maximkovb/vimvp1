@@ -101,18 +101,29 @@ export async function GET(request: Request) {
         details.push({ id: market.id.slice(0, 8), videoId: market.videoId, views: null, likes: null });
       }
 
-      // Update videoMetadata thumbnail if TikTok CDN URL changed (signed URLs rotate).
-      // Only persist URLs from the known TikTok CDN domain to prevent injection.
-      if (stats?.thumbnailUrl && TIKTOK_THUMBNAIL_RE.test(stats.thumbnailUrl)) {
-        await db
-          .update(markets)
-          .set({
-            videoMetadata: {
-              ...(market.videoMetadata ?? { title: "", channelTitle: "" }),
-              thumbnail: stats.thumbnailUrl,
-            },
-          })
-          .where(eq(markets.id, market.id));
+      // Refresh videoMetadata CDN-signed URLs (thumbnail and playUrl both expire ~24h).
+      // thumbnail: only persisted when it passes the TikTok CDN domain allowlist.
+      // playUrl: persisted whenever non-empty — guards against overwriting a valid URL with "".
+      // Single UPDATE to keep both fields in sync atomically.
+      if (stats !== null) {
+        const newThumbnail =
+          stats.thumbnailUrl && TIKTOK_THUMBNAIL_RE.test(stats.thumbnailUrl)
+            ? stats.thumbnailUrl
+            : undefined;
+        const newPlayUrl = stats.playUrl || undefined;
+
+        if (newThumbnail !== undefined || newPlayUrl !== undefined) {
+          await db
+            .update(markets)
+            .set({
+              videoMetadata: {
+                ...(market.videoMetadata ?? { title: "", thumbnail: "", channelTitle: "" }),
+                ...(newThumbnail !== undefined ? { thumbnail: newThumbnail } : {}),
+                ...(newPlayUrl !== undefined ? { playUrl: newPlayUrl } : {}),
+              },
+            })
+            .where(eq(markets.id, market.id));
+        }
       }
 
       // Auto-resolve if milestone crossed
