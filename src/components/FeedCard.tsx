@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useState, useRef, forwardRef, useImperativeHandle } from "react";
+import { useState, useRef, forwardRef, useImperativeHandle, useEffect } from "react";
 import { TIKTOK_THUMBNAIL_RE } from "@/lib/constants";
 import { TikTokEmbed } from "./TikTokEmbed";
 import { TradePanel } from "./TradePanel";
@@ -142,31 +142,57 @@ export const FeedCard = forwardRef<FeedCardHandle, FeedCardProps>(function FeedC
 }: FeedCardProps, ref) {
   const [currentPlayUrl, setCurrentPlayUrl] = useState(videoMetadata?.playUrl ?? null);
   const [isMuted, setIsMuted] = useState(true);
-  const [isPaused, setIsPaused] = useState(false);
+  const [isPaused, setIsPaused] = useState(true);
+  const [progress, setProgress] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const playPromiseRef = useRef<Promise<void> | null>(null);
 
   useImperativeHandle(ref, () => ({
     activate() {
       const v = videoRef.current;
       if (!v) return;
+      setProgress(0);
+      setIsPaused(false);
       v.muted = false;
       setIsMuted(false);
-      v.play().catch(() => {
-        // Autoplay policy blocked unmuted play — fall back to muted
-        v.muted = true;
-        setIsMuted(true);
-        v.play().catch(() => {});
-      });
+      playPromiseRef.current = v.play()
+        .catch(() => {
+          // Autoplay policy blocked unmuted play — fall back to muted
+          v.muted = true;
+          setIsMuted(true);
+          playPromiseRef.current = v.play().catch(() => {});
+        });
     },
     deactivate() {
       const v = videoRef.current;
       if (!v) return;
-      v.pause();
-      v.muted = true;
-      setIsMuted(true);
+      const doStop = () => {
+        v.pause();
+        v.muted = true;
+        setIsMuted(true);
+        setIsPaused(true);
+      };
+      // Await any pending play() promise before pausing to prevent the
+      // play/pause race where play() resolves after pause() and re-starts the video
+      if (playPromiseRef.current) {
+        playPromiseRef.current.then(doStop).catch(doStop);
+        playPromiseRef.current = null;
+      } else {
+        doStop();
+      }
     },
   }));
+
+  useEffect(() => {
+    return () => {
+      const v = videoRef.current;
+      if (!v) return;
+      v.pause();
+      v.removeAttribute("src");
+      v.load();
+    };
+  }, []);
 
   const thumbnailSrc =
     videoMetadata?.thumbnail && TIKTOK_THUMBNAIL_RE.test(videoMetadata.thumbnail)
@@ -177,6 +203,8 @@ export const FeedCard = forwardRef<FeedCardHandle, FeedCardProps>(function FeedC
   async function handleVideoError() {
     if (refreshing) return;
     setRefreshing(true);
+    // Sync muted state before the video remounts so the DOM attribute matches React state
+    setIsMuted(true);
     try {
       const res = await fetch(`/api/tiktok/${videoId}/play-url`);
       if (res.ok) {
@@ -203,9 +231,15 @@ export const FeedCard = forwardRef<FeedCardHandle, FeedCardProps>(function FeedC
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
-      video.play().catch(() => {});
+      playPromiseRef.current = video.play().catch(() => {});
     } else {
-      video.pause();
+      const doStop = () => video.pause();
+      if (playPromiseRef.current) {
+        playPromiseRef.current.then(doStop).catch(doStop);
+        playPromiseRef.current = null;
+      } else {
+        doStop();
+      }
     }
   }
 
@@ -280,13 +314,17 @@ export const FeedCard = forwardRef<FeedCardHandle, FeedCardProps>(function FeedC
               key={currentPlayUrl}
               src={currentPlayUrl}
               poster={thumbnailSrc ?? undefined}
-              muted
+              muted={isMuted}
               loop
               playsInline
-              preload="metadata"
+              preload={priority ? "metadata" : "none"}
               className="absolute inset-0 w-full h-full object-cover"
               onClick={(e) => { e.stopPropagation(); togglePause(); }}
               onError={handleVideoError}
+              onTimeUpdate={(e) => {
+                const v = e.currentTarget;
+                if (v.duration > 0) setProgress(v.currentTime / v.duration);
+              }}
               onPause={() => setIsPaused(true)}
               onPlay={() => setIsPaused(false)}
             />
@@ -349,6 +387,14 @@ export const FeedCard = forwardRef<FeedCardHandle, FeedCardProps>(function FeedC
         {/* Top-right progress ring */}
         <div className="absolute top-4 right-4 z-10">
           <ProgressRing current={currentCount} target={milestoneThreshold} />
+        </div>
+
+        {/* Video progress bar */}
+        <div className="absolute bottom-[108px] left-0 right-0 h-[2px] bg-white/20 z-20 pointer-events-none">
+          <div
+            className="h-full bg-white"
+            style={{ width: `${progress * 100}%`, transition: 'none' }}
+          />
         </div>
 
         {/* Bottom content */}
