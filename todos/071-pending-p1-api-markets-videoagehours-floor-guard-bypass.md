@@ -1,5 +1,5 @@
 ---
-status: pending
+status: complete
 priority: p1
 issue_id: "071"
 tags: [code-review, security, api, calibration]
