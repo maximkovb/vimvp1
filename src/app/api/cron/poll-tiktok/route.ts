@@ -4,7 +4,7 @@ import { markets, tiktokPolls } from "@/db/schema";
 import { and, or, eq, sql } from "drizzle-orm";
 import { verifyCronAuth } from "@/lib/cron-auth";
 import { fetchTikTokStatsById } from "@/lib/tiktok";
-import { TIKTOK_THUMBNAIL_RE } from "@/lib/constants";
+import { TIKTOK_THUMBNAIL_RE, TIKTOK_PLAY_URL_RE } from "@/lib/constants";
 import { resolveMarket } from "@/lib/oracle";
 
 export const maxDuration = 60;
@@ -102,24 +102,30 @@ export async function GET(request: Request) {
       }
 
       // Refresh videoMetadata CDN-signed URLs (thumbnail and playUrl both expire ~24h).
-      // thumbnail: only persisted when it passes the TikTok CDN domain allowlist.
-      // playUrl: persisted whenever non-empty — guards against overwriting a valid URL with "".
-      // Single UPDATE to keep both fields in sync atomically.
+      // Both are validated against domain allowlists before DB write.
+      // Dirty-check skips the UPDATE when neither value has changed from what's stored.
       if (stats !== null) {
         const newThumbnail =
           stats.thumbnailUrl && TIKTOK_THUMBNAIL_RE.test(stats.thumbnailUrl)
             ? stats.thumbnailUrl
             : undefined;
-        const newPlayUrl = stats.playUrl || undefined;
+        const newPlayUrl =
+          stats.playUrl && TIKTOK_PLAY_URL_RE.test(stats.playUrl)
+            ? stats.playUrl
+            : undefined;
 
-        if (newThumbnail !== undefined || newPlayUrl !== undefined) {
+        const thumbnailChanged = newThumbnail !== undefined && newThumbnail !== market.videoMetadata?.thumbnail;
+        const playUrlChanged = newPlayUrl !== undefined && newPlayUrl !== market.videoMetadata?.playUrl;
+
+        if (thumbnailChanged || playUrlChanged) {
           await db
             .update(markets)
             .set({
               videoMetadata: {
+                // Type-satisfaction fallback — markets always have videoMetadata set before polling begins
                 ...(market.videoMetadata ?? { title: "", thumbnail: "", channelTitle: "" }),
-                ...(newThumbnail !== undefined ? { thumbnail: newThumbnail } : {}),
-                ...(newPlayUrl !== undefined ? { playUrl: newPlayUrl } : {}),
+                ...(thumbnailChanged && { thumbnail: newThumbnail! }),
+                ...(playUrlChanged && { playUrl: newPlayUrl! }),
               },
             })
             .where(eq(markets.id, market.id));

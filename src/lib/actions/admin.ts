@@ -10,7 +10,7 @@ import { computeMilestoneFloor } from "@/lib/market-utils";
 import { computeExpectedOutcome } from "@/lib/calibration";
 import { revalidatePath } from "next/cache";
 import { distributePayout, refundPositions } from "@/lib/services/payout";
-import { TIKTOK_THUMBNAIL_RE } from "@/lib/constants";
+import { TIKTOK_THUMBNAIL_RE, TIKTOK_PLAY_URL_RE } from "@/lib/constants";
 import { extractTikTokVideoId, fetchTikTokStatsById } from "@/lib/tiktok";
 import { resolveMarket } from "@/lib/oracle";
 import { computeMarketSuggestion, type MarketSuggestionInput } from "@/lib/services/marketSuggestion";
@@ -177,10 +177,11 @@ export async function createMarket(formData: FormData) {
   const tikapiPostId = (formData.get("tikapiPostId") as string) || undefined;
   const videoDescriptionRaw = (formData.get("videoDescription") as string) || undefined;
   const videoDescription = videoDescriptionRaw?.slice(0, 5000) || undefined;
-  const playUrlRaw = (formData.get("playUrl") as string) || undefined;
+  const playUrlRaw = (formData.get("playUrl") as string) || "";
 
-  // Only persist thumbnails from known TikTok CDN URLs — rejects injected URLs.
+  // Only persist URLs from known CDN domains — rejects injected or off-domain URLs.
   const thumbnail = TIKTOK_THUMBNAIL_RE.test(thumbnailRaw) ? thumbnailRaw : "";
+  const playUrl = TIKTOK_PLAY_URL_RE.test(playUrlRaw) ? playUrlRaw : undefined;
 
   const now = new Date();
   const hours = resolutionHoursNum;
@@ -189,45 +190,45 @@ export async function createMarket(formData: FormData) {
 
   const marketId = crypto.randomUUID();
 
-  await db.insert(markets).values({
-    id: marketId,
-    videoId,
-    ...(tikapiPostId ? { tikapiPostId } : {}),
-    title,
-    description: description || null,
-    questionType: validatedQuestionType,
-    milestoneThreshold: thresholdBigInt,
-    bParameter: b.toFixed(2),
-    status: publishImmediately ? "active" : "draft",
-    videoMetadata: {
-      title: videoTitle,
-      thumbnail,
-      channelTitle,
-      ...(creatorId ? { creatorId } : {}),
-      ...(videoDescription ? { description: videoDescription } : {}),
-      ...(playUrlRaw ? { playUrl: playUrlRaw } : {}),
-    },
-    opensAt: publishImmediately ? now : null,
-    haltsAt: publishImmediately ? haltsAt : null,
-    resolvesAt: publishImmediately ? resolvesAt : null,
-    createdBy: session!.user!.id!,
-  });
-
-  // Create initial price snapshot
-  if (publishImmediately) {
-    const prices = allPrices([0, 0], b);
-    await db.insert(priceSnapshots).values({
-      marketId,
-      priceYes: prices[0].toFixed(6),
-      priceNo: prices[1].toFixed(6),
+  await db.transaction(async (tx) => {
+    await tx.insert(markets).values({
+      id: marketId,
+      videoId,
+      ...(tikapiPostId ? { tikapiPostId } : {}),
+      title,
+      description: description || null,
+      questionType: validatedQuestionType,
+      milestoneThreshold: thresholdBigInt,
+      bParameter: b.toFixed(2),
+      status: publishImmediately ? "active" : "draft",
+      videoMetadata: {
+        title: videoTitle,
+        thumbnail,
+        channelTitle,
+        ...(creatorId ? { creatorId } : {}),
+        ...(videoDescription ? { description: videoDescription } : {}),
+        ...(playUrl ? { playUrl } : {}),
+      },
+      opensAt: publishImmediately ? now : null,
+      haltsAt: publishImmediately ? haltsAt : null,
+      resolvesAt: publishImmediately ? resolvesAt : null,
+      createdBy: session!.user!.id!,
     });
-  }
 
-  // Insert initial poll row with the already-validated view/like counts.
-  await db.insert(tiktokPolls).values({
-    marketId,
-    viewCount: BigInt(initialViewCount),
-    likeCount: BigInt(initialLikeCount),
+    if (publishImmediately) {
+      const prices = allPrices([0, 0], b);
+      await tx.insert(priceSnapshots).values({
+        marketId,
+        priceYes: prices[0].toFixed(6),
+        priceNo: prices[1].toFixed(6),
+      });
+    }
+
+    await tx.insert(tiktokPolls).values({
+      marketId,
+      viewCount: BigInt(initialViewCount),
+      likeCount: BigInt(initialLikeCount),
+    });
   });
 
   revalidatePath("/");
@@ -376,7 +377,7 @@ export async function createTestMarket(
   const thumbnail = TIKTOK_THUMBNAIL_RE.test(stats.thumbnailUrl) ? stats.thumbnailUrl : "";
   const channelTitle = stats.creatorName;
   const tikapiPostId = stats.tikapiPostId;
-  const playUrl = stats.playUrl || undefined;
+  const playUrl = stats.playUrl && TIKTOK_PLAY_URL_RE.test(stats.playUrl) ? stats.playUrl : undefined;
 
   const now = new Date();
   const resolvesAt = new Date(now.getTime() + 48 * 60 * 60 * 1000);
