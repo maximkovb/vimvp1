@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, createRef, type RefObject } from "react";
+import { useState, useRef, useEffect, createRef, useMemo, useCallback, type RefObject } from "react";
 import { FeedCard, type FeedCardHandle } from "./FeedCard";
 import { FeedEndGrid } from "./FeedEndGrid";
 import { BetSheet } from "./BetSheet";
@@ -30,10 +30,6 @@ interface FeedMarket {
   bParameter: string;
 }
 
-interface GridMarket extends FeedMarket {
-  // same shape, used for the end grid
-}
-
 interface PollData {
   marketId: string;
   viewCount: bigint | null;
@@ -42,7 +38,7 @@ interface PollData {
 
 interface DiscoverFeedProps {
   feedMarkets: FeedMarket[];
-  gridMarkets: GridMarket[];
+  gridMarkets: FeedMarket[];
   pollData: PollData[];
   trendingIds: string[];
 }
@@ -72,12 +68,15 @@ export function DiscoverFeed({
   const [sheet, setSheet] = useState<SheetState>(CLOSED_SHEET);
   const feedColumnRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const activeIdxRef = useRef<number>(-1);
 
-  // Stable ref array — one slot per feed card, created on demand
+  // Ref array resizes to match feedMarkets exactly — prevents stale refs when markets are added/removed.
   const cardRefs = useRef<RefObject<FeedCardHandle | null>[]>([]);
-  feedMarkets.forEach((_, i) => {
-    if (!cardRefs.current[i]) cardRefs.current[i] = createRef<FeedCardHandle>();
-  });
+  if (cardRefs.current.length !== feedMarkets.length) {
+    cardRefs.current = feedMarkets.map(
+      (_, i) => cardRefs.current[i] ?? createRef<FeedCardHandle>()
+    );
+  }
 
   useEffect(() => {
     const container = feedColumnRef.current;
@@ -87,21 +86,33 @@ export function DiscoverFeed({
       (entries) => {
         entries.forEach((entry) => {
           if (!entry.isIntersecting) return;
-          const el = entry.target;
+          const el = entry.target as HTMLElement;
 
-          // Sentinel: FeedEndGrid entered — deactivate all cards
+          // Sentinel: FeedEndGrid entered — deactivate current card
           if (el === sentinelRef.current) {
-            cardRefs.current.forEach((ref) => ref.current?.deactivate());
+            const prev = activeIdxRef.current;
+            if (prev !== -1) {
+              cardRefs.current[prev]?.current?.deactivate();
+              const prevEl = container.querySelector<HTMLElement>(`[data-card-index="${prev}"]`);
+              if (prevEl) prevEl.removeAttribute("data-active");
+            }
+            activeIdxRef.current = -1;
             return;
           }
 
-          const idx = Number((el as HTMLElement).dataset.cardIndex);
+          const idx = Number(el.dataset.cardIndex);
           if (isNaN(idx)) return;
 
-          // Deactivate every other card, then activate the entering one
-          cardRefs.current.forEach((ref, i) => {
-            if (i !== idx) ref.current?.deactivate();
-          });
+          // Deactivate only the previously active card (O(1) instead of O(n))
+          const prev = activeIdxRef.current;
+          if (prev !== -1 && prev !== idx) {
+            cardRefs.current[prev]?.current?.deactivate();
+            const prevEl = container.querySelector<HTMLElement>(`[data-card-index="${prev}"]`);
+            if (prevEl) prevEl.removeAttribute("data-active");
+          }
+
+          activeIdxRef.current = idx;
+          el.setAttribute("data-active", "true");
           cardRefs.current[idx]?.current?.activate();
         });
       },
@@ -116,15 +127,23 @@ export function DiscoverFeed({
     return () => observer.disconnect();
   }, [feedMarkets.length]);
 
-  const pollMap = new Map(
-    pollData.map((p) => ({
-      marketId: p.marketId,
-      viewCount: p.viewCount,
-      likeCount: p.likeCount,
-    })).map((p) => [p.marketId, p])
+  // O(1) trending lookup — rebuild only when trendingIds array reference changes.
+  const trendingSet = useMemo(() => new Set(trendingIds), [trendingIds]);
+
+  // Stable poll lookup — keyed by marketId.
+  const pollMap = useMemo(
+    () => new Map(pollData.map((p) => [p.marketId, p] as const)),
+    [pollData]
   );
 
-  function openSheet(market: FeedMarket, initialOutcome?: number) {
+  // Pre-compute prices once per market per render cycle so FeedCard receives stable values.
+  const pricesByMarketId = useMemo(
+    () => new Map(feedMarkets.map((m) => [m.id, getMarketPrices(m)] as const)),
+    [feedMarkets]
+  );
+
+  // Stable openSheet callback — depends only on setSheet (which is always stable).
+  const openSheet = useCallback((market: FeedMarket, initialOutcome?: number) => {
     const prices = getMarketPrices(market);
     setSheet({
       open: true,
@@ -133,11 +152,15 @@ export function DiscoverFeed({
       initialOutcome,
       title: market.title,
     });
-  }
+  }, []);
 
-  function closeSheet() {
-    setSheet(CLOSED_SHEET);
-  }
+  // Stable per-card onTap callbacks — recreated only when feedMarkets or openSheet changes.
+  const cardTapHandlers = useMemo(
+    () => feedMarkets.map((market) => (initialOutcome?: number) => openSheet(market, initialOutcome)),
+    [feedMarkets, openSheet]
+  );
+
+  const closeSheet = useCallback(() => setSheet(CLOSED_SHEET), []);
 
   return (
     <>
@@ -148,7 +171,7 @@ export function DiscoverFeed({
       >
         {feedMarkets.map((market, index) => {
           const poll = pollMap.get(market.id);
-          const prices = getMarketPrices(market);
+          const prices = pricesByMarketId.get(market.id) ?? [0.5, 0.5];
           const currentCount =
             poll
               ? market.questionType === "likes"
@@ -170,9 +193,9 @@ export function DiscoverFeed({
                 videoId={market.videoId}
                 videoMetadata={market.videoMetadata}
                 currentCount={currentCount}
-                isTrending={trendingIds.includes(market.id)}
+                isTrending={trendingSet.has(market.id)}
                 priority={index < 2}
-                onTap={(initialOutcome) => openSheet(market, initialOutcome)}
+                onTap={cardTapHandlers[index]}
               />
             </div>
           );

@@ -83,6 +83,8 @@ export async function fetchVideoStats(url: string) {
 export async function createMarket(formData: FormData) {
   const session = await auth();
   if (!isAdmin(session)) return { error: "Unauthorized" };
+  const userId = session?.user?.id;
+  if (!userId) return { error: "Session incomplete" };
 
   const videoUrl = (formData.get("videoUrl") ?? "") as string;
   const title = (formData.get("title") ?? "") as string;
@@ -153,7 +155,7 @@ export async function createMarket(formData: FormData) {
 
   // Validate resolutionHours before using it in any computation.
   const resolutionHoursNum = parseInt(resolutionHours || "");
-  if (![24, 48, 72].includes(resolutionHoursNum) || isNaN(resolutionHoursNum)) {
+  if (isNaN(resolutionHoursNum) || ![24, 48, 72].includes(resolutionHoursNum)) {
     return { error: "resolutionHours must be 24, 48, or 72" };
   }
 
@@ -163,7 +165,7 @@ export async function createMarket(formData: FormData) {
     resolutionHoursNum,
     channelAvgViews
   );
-  if (Number(milestoneThresholdRaw) < requiredFloor) {
+  if (Number(thresholdBigInt) < requiredFloor) {
     return {
       error: `Milestone must exceed the expected ${validatedQuestionType} count at resolution (minimum: ${requiredFloor.toLocaleString()})`,
     };
@@ -212,7 +214,7 @@ export async function createMarket(formData: FormData) {
       opensAt: publishImmediately ? now : null,
       haltsAt: publishImmediately ? haltsAt : null,
       resolvesAt: publishImmediately ? resolvesAt : null,
-      createdBy: session!.user!.id!,
+      createdBy: userId,
     });
 
     if (publishImmediately) {
@@ -355,6 +357,8 @@ export async function createTestMarket(
 ) {
   const session = await auth();
   if (!isAdmin(session)) return { error: "Unauthorized" };
+  const userId = session?.user?.id;
+  if (!userId) return { error: "Session incomplete" };
 
   const videoId = extractTikTokVideoId(videoUrl);
   if (!videoId) return { error: "Invalid TikTok URL — paste a full tiktok.com/@user/video/... URL" };
@@ -405,7 +409,7 @@ export async function createTestMarket(
       opensAt: now,
       haltsAt,
       resolvesAt,
-      createdBy: session!.user!.id!,
+      createdBy: userId,
     });
 
     await tx.insert(priceSnapshots).values({

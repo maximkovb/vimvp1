@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useState, useRef, forwardRef, useImperativeHandle, useEffect } from "react";
+import { useState, useRef, forwardRef, useImperativeHandle, useEffect, memo } from "react";
 import { TIKTOK_THUMBNAIL_RE } from "@/lib/constants";
 import { TikTokEmbed } from "./TikTokEmbed";
 import { TradePanel } from "./TradePanel";
@@ -125,7 +125,7 @@ function PlayIcon() {
   );
 }
 
-export const FeedCard = forwardRef<FeedCardHandle, FeedCardProps>(function FeedCard({
+export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function FeedCard({
   id,
   title,
   status,
@@ -161,7 +161,9 @@ export const FeedCard = forwardRef<FeedCardHandle, FeedCardProps>(function FeedC
           // Autoplay policy blocked unmuted play — fall back to muted
           v.muted = true;
           setIsMuted(true);
-          playPromiseRef.current = v.play().catch(() => {});
+          // Return the fallback promise so playPromiseRef always represents the
+          // live async chain; deactivate() can then safely await it.
+          return v.play().catch(() => {});
         });
     },
     deactivate() {
@@ -319,6 +321,9 @@ export const FeedCard = forwardRef<FeedCardHandle, FeedCardProps>(function FeedC
               playsInline
               preload={priority ? "metadata" : "none"}
               className="absolute inset-0 w-full h-full object-cover"
+              data-is-muted={isMuted}
+              data-is-paused={isPaused}
+              data-progress={Math.round(progress * 100)}
               onClick={(e) => { e.stopPropagation(); togglePause(); }}
               onError={handleVideoError}
               onTimeUpdate={(e) => {
@@ -442,4 +447,4 @@ export const FeedCard = forwardRef<FeedCardHandle, FeedCardProps>(function FeedC
       </div>
     </div>
   );
-});
+}));
