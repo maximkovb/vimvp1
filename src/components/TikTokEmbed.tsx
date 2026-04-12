@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 
 interface TikTokEmbedProps {
   videoId: string;
@@ -41,6 +41,14 @@ export function TikTokEmbed({ videoId, title, playUrl, thumbnail, creatorId, sho
   const [isMuted, setIsMuted] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  // React's muted JSX prop only sets the HTML attribute, not the DOM .muted property.
+  // Set it imperatively after each mount (including key-driven remounts on URL change).
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.muted = true;
+    }
+  }, [currentPlayUrl]);
 
   async function handleVideoError() {
     if (refreshing) return;

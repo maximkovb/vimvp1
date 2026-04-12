@@ -3,7 +3,6 @@
 import Image from "next/image";
 import { useState, useRef, forwardRef, useImperativeHandle, useEffect, memo } from "react";
 import { TIKTOK_THUMBNAIL_RE } from "@/lib/constants";
-import { TikTokEmbed } from "./TikTokEmbed";
 import { TradePanel } from "./TradePanel";
 import type { MarketStatus, QuestionType } from "@/db/schema";
 
@@ -146,32 +145,45 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
   const [progress, setProgress] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const desktopVideoRef = useRef<HTMLVideoElement>(null);
   const playPromiseRef = useRef<Promise<void> | null>(null);
 
   useImperativeHandle(ref, () => ({
     activate() {
-      const v = videoRef.current;
-      if (!v) return;
+      const isDesktop = window.matchMedia('(min-width: 1024px)').matches;
+      const activeV = isDesktop ? desktopVideoRef.current : videoRef.current;
+      const inactiveV = isDesktop ? videoRef.current : desktopVideoRef.current;
+      if (!activeV) return;
+
       setProgress(0);
       setIsPaused(false);
-      v.muted = false;
+      activeV.muted = false;
       setIsMuted(false);
-      playPromiseRef.current = v.play()
+
+      // Keep the hidden layout's video silent while this one plays
+      if (inactiveV) {
+        inactiveV.pause();
+        inactiveV.muted = true;
+      }
+
+      playPromiseRef.current = activeV.play()
         .catch(() => {
           // Autoplay policy blocked unmuted play — fall back to muted
-          v.muted = true;
+          activeV.muted = true;
           setIsMuted(true);
           // Return the fallback promise so playPromiseRef always represents the
           // live async chain; deactivate() can then safely await it.
-          return v.play().catch(() => {});
+          return activeV.play().catch(() => {});
         });
     },
     deactivate() {
-      const v = videoRef.current;
-      if (!v) return;
       const doStop = () => {
-        v.pause();
-        v.muted = true;
+        // Stop both video elements defensively — ensures no hidden audio bleed
+        for (const v of [videoRef.current, desktopVideoRef.current]) {
+          if (!v) continue;
+          v.pause();
+          v.muted = true;
+        }
         setIsMuted(true);
         setIsPaused(true);
       };
@@ -188,11 +200,12 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
 
   useEffect(() => {
     return () => {
-      const v = videoRef.current;
-      if (!v) return;
-      v.pause();
-      v.removeAttribute("src");
-      v.load();
+      for (const v of [videoRef.current, desktopVideoRef.current]) {
+        if (!v) continue;
+        v.pause();
+        v.removeAttribute("src");
+        v.load();
+      }
     };
   }, []);
 
@@ -223,14 +236,17 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
   }
 
   function toggleMute() {
-    if (!videoRef.current) return;
+    const isDesktop = window.matchMedia('(min-width: 1024px)').matches;
+    const v = isDesktop ? desktopVideoRef.current : videoRef.current;
+    if (!v) return;
     const next = !isMuted;
-    videoRef.current.muted = next;
+    v.muted = next;
     setIsMuted(next);
   }
 
   function togglePause() {
-    const video = videoRef.current;
+    const isDesktop = window.matchMedia('(min-width: 1024px)').matches;
+    const video = isDesktop ? desktopVideoRef.current : videoRef.current;
     if (!video) return;
     if (video.paused) {
       playPromiseRef.current = video.play().catch(() => {});
@@ -248,18 +264,62 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
   return (
     <div className="relative w-full h-full overflow-hidden bg-background">
       {/* ── DESKTOP LAYOUT (≥1024px) ─────────────────────────────────────── */}
-      {/* TODO(desktop): wire IO control once TikTokEmbed exposes forwardRef */}
       <div className="hidden lg:flex flex-row h-full items-center justify-center gap-8 px-12">
-        {/* Left: 9:16 video via TikTokEmbed */}
-        <div className="w-[325px] flex-shrink-0">
-          <TikTokEmbed
-            videoId={videoId}
-            title={title}
-            playUrl={videoMetadata?.playUrl}
-            thumbnail={thumbnailSrc}
-            creatorId={videoMetadata?.creatorId}
-            showLink={false}
-          />
+        {/* Left: 9:16 native video — controlled by desktopVideoRef / activate() / deactivate() */}
+        <div className="relative w-[325px] flex-shrink-0">
+          <div className="relative w-full" style={{ paddingBottom: "177.78%" }}>
+            {currentPlayUrl ? (
+              <>
+                <video
+                  ref={desktopVideoRef}
+                  key={currentPlayUrl}
+                  src={currentPlayUrl}
+                  poster={thumbnailSrc ?? undefined}
+                  muted={isMuted}
+                  loop
+                  playsInline
+                  preload={priority ? "metadata" : "none"}
+                  className="absolute inset-0 w-full h-full object-cover rounded-xl cursor-pointer"
+                  onClick={(e) => { e.stopPropagation(); togglePause(); }}
+                  onError={handleVideoError}
+                  onTimeUpdate={(e) => {
+                    const v = e.currentTarget;
+                    if (v.duration > 0) setProgress(v.currentTime / v.duration);
+                  }}
+                  onPause={() => setIsPaused(true)}
+                  onPlay={() => setIsPaused(false)}
+                />
+
+                {/* Pause overlay */}
+                {isPaused && (
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none rounded-xl">
+                    <div className="rounded-full bg-black/50 p-3">
+                      <PlayIcon />
+                    </div>
+                  </div>
+                )}
+
+                {/* Mute toggle */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); toggleMute(); }}
+                  aria-label={isMuted ? "Unmute" : "Mute"}
+                  className="absolute bottom-3 right-3 rounded-full bg-black/60 p-1.5 text-white hover:bg-black/80 transition-colors z-10"
+                >
+                  {isMuted ? <MutedIcon /> : <UnmutedIcon />}
+                </button>
+              </>
+            ) : thumbnailSrc ? (
+              <Image
+                src={thumbnailSrc}
+                alt={title}
+                fill
+                className="object-cover rounded-xl"
+                priority={priority}
+              />
+            ) : (
+              <div className="absolute inset-0 rounded-xl bg-gradient-to-br from-card to-background" />
+            )}
+          </div>
         </div>
 
         {/* Right: side HUD */}
