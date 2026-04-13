@@ -15,3 +15,9 @@ export const TIKTOK_PLAY_URL_RE =
 
 /** TikTok video IDs are 15–20 digit numeric strings. */
 export const TIKTOK_VIDEO_ID_RE = /^\d{15,20}$/;
+
+/**
+ * TikTok username handles: letters, digits, underscores, periods, 1–24 chars.
+ * Applied to the creatorId param before inclusion in any outbound URL (SSRF guard).
+ */
+export const TIKTOK_CREATOR_ID_RE = /^[a-zA-Z0-9._]{1,24}$/;

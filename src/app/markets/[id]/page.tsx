@@ -9,6 +9,7 @@ import { MarketHUD } from "@/components/MarketHUD";
 import { LiveEngagementStats } from "@/components/LiveEngagementStats";
 import { VideoDescription } from "@/components/VideoDescription";
 import { TikTokEmbed } from "@/components/TikTokEmbed";
+import { CreatorBaselineCard } from "@/components/CreatorBaselineCard";
 import type { MarketData } from "@/types/market";
 
 export default async function MarketPage({
@@ -131,6 +132,14 @@ export default async function MarketPage({
               {/* Engagement stats — live via SWR */}
               <LiveEngagementStats marketId={id} initialData={initialData} />
             </div>
+          )}
+
+          {/* Creator baseline — always render when videoMetadata present */}
+          {videoMetadata && (
+            <CreatorBaselineCard
+              creatorId={videoMetadata.creatorId ?? ""}
+              videoId={market.tikapiPostId ?? market.videoId}
+            />
           )}
 
           {/* Video description */}
