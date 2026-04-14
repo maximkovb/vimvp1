@@ -1,11 +1,11 @@
 "use client";
 
 import useSWR from "swr";
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { UTCTimestamp } from "lightweight-charts";
 import type { MarketData } from "@/types/market";
-import { VideoStatsChart } from "@/components/VideoStatsChart";
 import { PriceChart } from "@/components/PriceChart";
+import { VideoStatsChart } from "@/components/VideoStatsChart";
 import { Toast } from "@/components/Toast";
 import { useToast } from "@/hooks/useToast";
 import { marketFetcher } from "@/lib/market-fetcher";
@@ -83,10 +83,13 @@ export function MarketLiveData({
       <Toast show={toast.show} message={toast.message} onDismiss={toast.dismiss} />
 
       <div className="space-y-6">
-        {/* View / Like trajectory */}
+        {/* Channel history (server-rendered, passed as children) */}
+        {children}
+
+        {/* Milestone progress chart */}
         <div className="bg-card border border-border rounded-xl p-4">
           <h2 className="text-sm font-medium text-muted mb-3">
-            {market.questionType === "views" ? "View" : "Like"} Count Trajectory
+            {market.questionType === "views" ? "View" : "Like"} Progress
           </h2>
           {statsChartData.length > 0 ? (
             <VideoStatsChart
@@ -96,13 +99,10 @@ export function MarketLiveData({
             />
           ) : (
             <div className="h-48 flex items-center justify-center text-muted text-sm">
-              Poll data not yet available — chart will appear after the first polling interval
+              No stats yet — first poll fires within 10 minutes
             </div>
           )}
         </div>
-
-        {/* Channel history (server-rendered, passed as children) */}
-        {children}
 
         {/* Price chart */}
         <div className="bg-card border border-border rounded-xl p-4">

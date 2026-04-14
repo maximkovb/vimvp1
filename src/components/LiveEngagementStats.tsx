@@ -14,7 +14,13 @@ export function LiveEngagementStats({ marketId, initialData }: LiveEngagementSta
   const { data } = useSWR<MarketData>(
     `/api/markets/${marketId}`,
     marketFetcher,
-    { refreshInterval: 60_000, fallbackData: initialData }
+    {
+      refreshInterval: (latestData) => {
+        const status = latestData?.status ?? initialData.status;
+        return status === "halted" || status === "resolving" ? 10_000 : 60_000;
+      },
+      fallbackData: initialData,
+    }
   );
 
   const market = data ?? initialData;
