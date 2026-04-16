@@ -21,6 +21,9 @@ export interface MarketData {
   } | null;
   priceYes: number;
   priceNo: number;
+  quantityYes: number;
+  quantityNo: number;
+  bParameter: number;
   outcome: number | null;
   resolvesAt: string | null;
   resolvedAt: string | null;

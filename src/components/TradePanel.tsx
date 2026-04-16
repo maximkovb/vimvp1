@@ -1,90 +1,129 @@
 "use client";
 
-import { useState, useTransition, useRef } from "react";
-import { buyShares, previewTrade, type TradePreview } from "@/lib/actions/trade";
+import { useState, useTransition } from "react";
+import { buyShares } from "@/lib/actions/trade";
+import { sharesForCost, allPrices } from "@/lib/lmsr";
+import { CoinSlider } from "./CoinSlider";
+
+const PRICE_STALENESS_THRESHOLD = 0.02;
 
 export interface TradeResult {
-  outcome: number; // 0=YES, 1=NO
+  outcome: number;
   cost: number;
   shares: number;
   priceAfter: number;
 }
 
-interface TradePanelProps {
+interface StaleConfirm {
+  payoutAtFreshPrices: number;
+}
+
+export interface TradePanelProps {
   marketId: string;
-  prices: number[];
+  prices: number[];       // [priceYes, priceNo]
+  quantities: number[];   // [quantityYes, quantityNo]
+  bParameter: number;
+  userBalance?: number;   // slider max cap; falls back to 500
   initialOutcome?: number;
   onTradeSuccess?: (result: TradeResult) => void;
 }
 
-export function TradePanel({ marketId, prices, initialOutcome, onTradeSuccess }: TradePanelProps) {
-  const [outcome, setOutcome] = useState<number>(initialOutcome ?? 0); // 0=YES, 1=NO
-  const [amount, setAmount] = useState("");
-  const [preview, setPreview] = useState<TradePreview | null>(null);
+export function TradePanel({
+  marketId,
+  prices,
+  quantities,
+  bParameter,
+  userBalance,
+  initialOutcome,
+  onTradeSuccess,
+}: TradePanelProps) {
+  const [outcome, setOutcome] = useState<number>(initialOutcome ?? 0);
+  const [amount, setAmount] = useState(10);
   const [error, setError] = useState("");
   const [isPending, startTransition] = useTransition();
-  const previewTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [staleConfirm, setStaleConfirm] = useState<StaleConfirm | null>(null);
 
-  function handleAmountChange(value: string) {
-    setAmount(value);
-    setError("");
-    setPreview(null);
+  const sliderMax = userBalance ?? 500;
 
-    const numAmount = parseFloat(value);
-    if (!numAmount || numAmount <= 0) return;
+  // Client-side LMSR — synchronous, no API calls
+  const ready = bParameter > 0;
+  const payoutYes = ready && amount > 0 ? sharesForCost(quantities, bParameter, 0, amount) : 0;
+  const payoutNo  = ready && amount > 0 ? sharesForCost(quantities, bParameter, 1, amount) : 0;
 
-    if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
-    previewTimerRef.current = setTimeout(async () => {
-      const result = await previewTrade(marketId, outcome, numAmount);
-      if ("error" in result) {
-        setError(result.error);
-      } else {
-        setPreview(result);
-      }
-    }, 400);
+  let priceImpact = 0;
+  if (ready && amount > 0) {
+    const selectedShares = outcome === 0 ? payoutYes : payoutNo;
+    const newQ = [...quantities];
+    newQ[outcome] += selectedShares;
+    const newPrices = allPrices(newQ, bParameter);
+    priceImpact = newPrices[outcome] - prices[outcome];
   }
 
-  async function handleOutcomeChange(newOutcome: number) {
+  function handleOutcomeChange(newOutcome: number) {
     setOutcome(newOutcome);
-    setPreview(null);
-    if (amount) {
-      const numAmount = parseFloat(amount);
-      if (numAmount > 0) {
-        const result = await previewTrade(marketId, newOutcome, numAmount);
-        if ("error" in result) {
-          setError(result.error);
-        } else {
-          setPreview(result);
-        }
+    setError("");
+    setStaleConfirm(null);
+  }
+
+  function handleAmountChange(value: number) {
+    setAmount(value);
+    setError("");
+    setStaleConfirm(null);
+  }
+
+  async function checkStaleness(): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/markets/${marketId}`, { cache: "no-store" });
+      if (!res.ok) throw new Error("fetch failed");
+      const fresh = await res.json();
+      const outcomeDelta = Math.abs(
+        (outcome === 0 ? fresh.priceYes : fresh.priceNo) - prices[outcome]
+      );
+      if (outcomeDelta > PRICE_STALENESS_THRESHOLD) {
+        const freshPayout = sharesForCost(
+          [fresh.quantityYes, fresh.quantityNo],
+          fresh.bParameter,
+          outcome,
+          amount
+        );
+        setStaleConfirm({ payoutAtFreshPrices: freshPayout });
+        return false;
       }
+      return true;
+    } catch {
+      setError("Could not verify current price. Please try again.");
+      return false;
     }
   }
 
-  function handleBuy() {
-    const numAmount = parseFloat(amount);
-    if (!numAmount || numAmount < 1) {
+  function executeBuy() {
+    startTransition(async () => {
+      const result = await buyShares(marketId, outcome, amount);
+      if ("error" in result) {
+        setError(result.error);
+        setStaleConfirm(null);
+        return;
+      }
+      // Compute priceAfter client-side using actual shares returned
+      const newQ = [...quantities];
+      newQ[outcome] += result.shares;
+      const priceAfter = allPrices(newQ, bParameter)[outcome];
+      setAmount(10);
+      setError("");
+      setStaleConfirm(null);
+      onTradeSuccess?.({ outcome, cost: result.cost, shares: result.shares, priceAfter });
+    });
+  }
+
+  async function handleBuy() {
+    if (amount < 1) {
       setError("Minimum trade is 1 coin");
       return;
     }
-
-    startTransition(async () => {
-      const result = await buyShares(marketId, outcome, numAmount);
-      if ("error" in result) {
-        setError(result.error);
-      } else {
-        // Capture priceAfter from the preview if available, otherwise use current price
-        const priceAfter = preview?.newPrice ?? prices[outcome] ?? 0;
-        setAmount("");
-        setPreview(null);
-        setError("");
-        onTradeSuccess?.({
-          outcome,
-          cost: result.cost,
-          shares: result.shares,
-          priceAfter,
-        });
-      }
-    });
+    setError("");
+    setStaleConfirm(null);
+    const canProceed = await checkStaleness();
+    if (canProceed) executeBuy();
   }
 
   return (
@@ -92,7 +131,7 @@ export function TradePanel({ marketId, prices, initialOutcome, onTradeSuccess }:
       <h2 className="text-sm font-medium text-muted mb-3">Place a Trade</h2>
 
       {/* Outcome selector */}
-      <div className="flex gap-2 mb-4">
+      <div className="flex gap-2 mb-5">
         <button
           onClick={() => handleOutcomeChange(0)}
           className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
@@ -115,25 +154,20 @@ export function TradePanel({ marketId, prices, initialOutcome, onTradeSuccess }:
         </button>
       </div>
 
-      {/* Amount input */}
+      {/* Coin amount slider */}
       <div className="mb-4">
-        <label className="block text-xs text-muted mb-1.5">
-          Amount (coins)
-        </label>
-        <input
-          type="number"
+        <CoinSlider
           value={amount}
-          onChange={(e) => handleAmountChange(e.target.value)}
-          placeholder="Enter amount..."
-          min="1"
-          step="1"
-          className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-accent text-sm"
+          onChange={handleAmountChange}
+          min={1}
+          max={sliderMax}
+          disabled={!ready || isPending}
         />
-        <div className="flex gap-2 mt-2">
+        <div className="flex gap-2 mt-3">
           {[10, 25, 50, 100].map((preset) => (
             <button
               key={preset}
-              onClick={() => handleAmountChange(preset.toString())}
+              onClick={() => handleAmountChange(Math.min(preset, sliderMax))}
               className="flex-1 py-1 text-xs bg-background border border-border rounded hover:bg-card-hover transition-colors"
             >
               {preset}
@@ -142,35 +176,54 @@ export function TradePanel({ marketId, prices, initialOutcome, onTradeSuccess }:
         </div>
       </div>
 
-      {/* Preview */}
-      {preview && (
+      {/* Real-time payout panel */}
+      {ready && (
         <div className="bg-background rounded-lg p-3 mb-4 space-y-1.5 text-sm">
-          <div className="flex justify-between">
-            <span className="text-muted">Est. shares</span>
-            <span className="font-medium">{preview.shares.toFixed(2)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted">Avg. price</span>
-            <span className="font-medium">
-              {(preview.avgPrice * 100).toFixed(1)}%
+          <div className="flex justify-between items-center">
+            <span className={outcome === 0 ? "text-foreground" : "text-muted"}>
+              Payout if YES wins
+            </span>
+            <span className={`font-medium ${outcome === 0 ? "text-green" : "text-muted"}`}>
+              {payoutYes.toFixed(1)} coins{outcome === 0 ? " ✓" : ""}
             </span>
           </div>
-          <div className="flex justify-between">
+          <div className="flex justify-between items-center">
+            <span className={outcome === 1 ? "text-foreground" : "text-muted"}>
+              Payout if NO wins
+            </span>
+            <span className={`font-medium ${outcome === 1 ? "text-red" : "text-muted"}`}>
+              {payoutNo.toFixed(1)} coins{outcome === 1 ? " ✓" : ""}
+            </span>
+          </div>
+          <div className="flex justify-between items-center pt-1.5 border-t border-border">
             <span className="text-muted">Price impact</span>
-            <span
-              className={`font-medium ${
-                preview.priceImpact > 0 ? "text-green" : "text-red"
-              }`}
-            >
-              {preview.priceImpact > 0 ? "+" : ""}
-              {(preview.priceImpact * 100).toFixed(2)}%
+            <span className={`font-medium text-xs ${priceImpact >= 0 ? "text-green" : "text-red"}`}>
+              {priceImpact >= 0 ? "+" : ""}{(priceImpact * 100).toFixed(2)}%
             </span>
           </div>
-          <div className="flex justify-between pt-1.5 border-t border-border">
-            <span className="text-muted">Potential payout</span>
-            <span className="font-medium text-green">
-              {preview.shares.toFixed(2)} coins
-            </span>
+        </div>
+      )}
+
+      {/* Staleness warning */}
+      {staleConfirm && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 mb-4 text-sm">
+          <p className="font-medium text-amber-600 dark:text-amber-400 mb-2">
+            Price moved! New payout: {staleConfirm.payoutAtFreshPrices.toFixed(1)} coins.
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setStaleConfirm(null)}
+              className="flex-1 py-1.5 text-xs border border-border rounded-lg hover:bg-card-hover transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={executeBuy}
+              disabled={isPending}
+              className="flex-1 py-1.5 text-xs bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors disabled:opacity-50"
+            >
+              Buy anyway
+            </button>
           </div>
         </div>
       )}
@@ -185,16 +238,14 @@ export function TradePanel({ marketId, prices, initialOutcome, onTradeSuccess }:
       {/* Buy button */}
       <button
         onClick={handleBuy}
-        disabled={isPending || !amount || parseFloat(amount) < 1}
+        disabled={isPending || !ready || amount < 1 || !!staleConfirm}
         className={`w-full py-2.5 rounded-lg font-medium text-sm text-white transition-colors disabled:opacity-50 ${
           outcome === 0
             ? "bg-green hover:bg-green/80"
             : "bg-red hover:bg-red/80"
         }`}
       >
-        {isPending
-          ? "Buying..."
-          : `Buy ${outcome === 0 ? "YES" : "NO"} — ${amount || "0"} coins`}
+        {isPending ? "Buying..." : `Buy ${outcome === 0 ? "YES" : "NO"} — ${amount} coins`}
       </button>
     </div>
   );

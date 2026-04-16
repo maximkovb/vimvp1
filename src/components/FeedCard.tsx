@@ -19,6 +19,9 @@ interface FeedCardProps {
   milestoneThreshold: bigint;
   priceYes: number;
   priceNo: number;
+  quantityYes: number;
+  quantityNo: number;
+  bParameter: number;
   videoId: string;
   videoMetadata: {
     title: string;
@@ -27,75 +30,160 @@ interface FeedCardProps {
     playUrl?: string | null;
     creatorId?: string | null;
   } | null;
-  currentCount: bigint | null; // latest viewCount or likeCount from tiktokPolls
+  currentCount: number | null; // latest viewCount or likeCount from tiktokPolls
   isTrending: boolean;
+  userHasPosition?: boolean;
   priority?: boolean;
   onTap: (initialOutcome?: number) => void;
 }
 
-function ProgressRing({
+function formatCount(n: number | null) {
+  if (n === null) return "—";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
+  return n.toString();
+}
+
+function formatTarget(n: number) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(0)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
+  return n.toString();
+}
+
+interface ProgressBarProps {
+  current: number | null;
+  target: bigint;
+  priceYes: number;
+  priceNo: number;
+  userHasPosition?: boolean;
+  /** When true, plays a fill animation from 0 → current value. Only fires once per mount. */
+  animate?: boolean;
+  /** Show numeric labels inline (desktop). On mobile, labels appear in a tap tooltip. */
+  showLabels?: boolean;
+}
+
+// Phases for the one-shot fill animation:
+//   idle    — not yet activated; bar shows current fillPct with no transition
+//   pending — activate() fired; bar SNAPS to 0% (no transition) so the fill has a clean origin
+//   filling — after two RAFs (0% has been painted); bar TRANSITIONS left→right to fillPct
+//   done    — animation finished; bar tracks fillPct with a short transition for live updates
+type AnimPhase = "idle" | "pending" | "filling" | "done";
+
+function ProgressBar({
   current,
   target,
-}: {
-  current: bigint | null;
-  target: bigint;
-}) {
-  const size = 56;
-  const strokeWidth = 3;
-  const radius = (size - strokeWidth) / 2;
-  const circumference = 2 * Math.PI * radius;
-
+  priceYes,
+  priceNo,
+  userHasPosition,
+  animate,
+  showLabels,
+}: ProgressBarProps) {
   const targetNum = Number(target);
-  const currentNum = current !== null ? Number(current) : null;
+  const fillPct =
+    current !== null && targetNum > 0 ? Math.min(current / targetNum, 1) : 0;
 
-  const pct =
-    currentNum !== null && targetNum > 0
-      ? Math.min(currentNum / targetNum, 1)
-      : 0;
-  const offset = circumference * (1 - pct);
+  const [phase, setPhase] = useState<AnimPhase>("idle");
+  const hasTriggered = useRef(false);
 
-  const formatCount = (n: number | null) => {
-    if (n === null) return "—";
-    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-    if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
-    return n.toString();
-  };
+  // idle → pending when animate prop goes true (once per mount)
+  useEffect(() => {
+    if (animate && !hasTriggered.current) {
+      hasTriggered.current = true;
+      setPhase("pending");
+    }
+  }, [animate]);
 
-  const formatTarget = (n: number) => {
-    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(0)}M`;
-    if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
-    return n.toString();
-  };
+  // pending → filling: wait two RAFs so the 0%-width paint lands before the transition starts
+  useEffect(() => {
+    if (phase !== "pending") return;
+    let raf1: number, raf2: number;
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setPhase("filling"));
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [phase]);
+
+  // filling → done after the CSS transition completes
+  useEffect(() => {
+    if (phase !== "filling") return;
+    const t = setTimeout(() => setPhase("done"), 850);
+    return () => clearTimeout(t);
+  }, [phase]);
+
+  // pending: snap to 0 so the fill animation has a clear left-edge origin
+  // all other phases: track the real fillPct
+  const displayFill = phase === "pending" ? 0 : fillPct;
+
+  // filling: slow entry animation; done: short transition for live price/view updates
+  const transitionStyle =
+    phase === "filling"
+      ? "width 0.8s ease-out"
+      : phase === "done"
+        ? "width 0.3s ease-out"
+        : "none";
+
+  const [showTooltip, setShowTooltip] = useState(false);
+
+  const isEmpty = current === null || targetNum === 0;
 
   return (
-    <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
-      <svg width={size} height={size} className="-rotate-90 absolute inset-0">
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          stroke="rgba(255,255,255,0.15)"
-          strokeWidth={strokeWidth}
-          fill="none"
-        />
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          stroke="var(--color-accent)"
-          strokeWidth={strokeWidth}
-          fill="none"
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-          strokeLinecap="round"
-        />
-      </svg>
-      <div className="relative z-10 text-center leading-tight">
-        <div className="text-[10px] font-bold text-foreground tabular-nums">
-          {formatCount(currentNum)}
-        </div>
-        <div className="text-[8px] text-muted">/{formatTarget(targetNum)}</div>
+    <div className="relative w-full">
+      {/* Bar track */}
+      <div
+        className="relative w-full h-[6px] bg-white/10 overflow-hidden cursor-pointer"
+        onClick={(e) => {
+          e.stopPropagation();
+          setShowTooltip((v) => !v);
+        }}
+      >
+        {isEmpty ? (
+          <div className="h-full w-full animate-pulse bg-white/10" />
+        ) : (
+          <>
+            {/* YES fill (green) */}
+            <div
+              className="absolute left-0 top-0 h-full bg-green"
+              style={{ width: `${displayFill * priceYes * 100}%`, transition: transitionStyle }}
+            />
+            {/* NO fill (red) — starts where YES ends */}
+            <div
+              className="absolute top-0 h-full bg-red"
+              style={{
+                left: `${displayFill * priceYes * 100}%`,
+                width: `${displayFill * priceNo * 100}%`,
+                transition: transitionStyle,
+              }}
+            />
+            {/* User position tick — thin white line at current fill edge */}
+            {userHasPosition && displayFill > 0 && (
+              <div
+                className="absolute top-0 h-full w-[2px] bg-white z-10"
+                style={{
+                  left: `${displayFill * 100}%`,
+                  transition: transitionStyle,
+                }}
+              />
+            )}
+          </>
+        )}
       </div>
+
+      {/* Tap tooltip (mobile) — numbers above the bar */}
+      {showTooltip && !isEmpty && (
+        <div className="absolute bottom-[10px] left-1/2 -translate-x-1/2 whitespace-nowrap bg-black/80 text-white text-[10px] font-medium px-2 py-1 rounded pointer-events-none z-30">
+          {formatCount(current)} / {formatTarget(targetNum)}&nbsp;·&nbsp;YES {(priceYes * 100).toFixed(0)}%&nbsp;·&nbsp;NO {(priceNo * 100).toFixed(0)}%
+        </div>
+      )}
+
+      {/* Always-visible labels (desktop HUD) */}
+      {showLabels && !isEmpty && (
+        <p className="mt-1 text-[10px] text-muted tabular-nums">
+          {formatCount(current)} / {formatTarget(targetNum)}&nbsp;·&nbsp;YES {(priceYes * 100).toFixed(0)}%&nbsp;·&nbsp;NO {(priceNo * 100).toFixed(0)}%
+        </p>
+      )}
     </div>
   );
 }
@@ -132,10 +220,14 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
   milestoneThreshold,
   priceYes,
   priceNo,
+  quantityYes,
+  quantityNo,
+  bParameter,
   videoId,
   videoMetadata,
   currentCount,
   isTrending,
+  userHasPosition,
   priority = false,
   onTap,
 }: FeedCardProps, ref) {
@@ -144,6 +236,10 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
   const [isPaused, setIsPaused] = useState(true);
   const [progress, setProgress] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+  // Progress bar animation — fires once on first activate(), then stays true for the
+  // lifetime of the component (no re-animation on scroll-back, resets on page refresh).
+  const [barAnimate, setBarAnimate] = useState(false);
+  const barAnimatedRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const desktopVideoRef = useRef<HTMLVideoElement>(null);
   const playPromiseRef = useRef<Promise<void> | null>(null);
@@ -154,6 +250,12 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
       const activeV = isDesktop ? desktopVideoRef.current : videoRef.current;
       const inactiveV = isDesktop ? videoRef.current : desktopVideoRef.current;
       if (!activeV) return;
+
+      // Trigger the progress bar fill animation on the very first activation only.
+      if (!barAnimatedRef.current) {
+        barAnimatedRef.current = true;
+        setBarAnimate(true);
+      }
 
       setProgress(0);
       setIsPaused(false);
@@ -343,20 +445,24 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
             <p className="font-semibold leading-snug mt-1">{title}</p>
           </div>
 
-          {/* Progress ring + milestone */}
-          <div className="flex items-center gap-3">
-            <ProgressRing current={currentCount} target={milestoneThreshold} />
-            <p className="text-xs text-muted">
-              Target:{" "}
-              {Number(milestoneThreshold).toLocaleString()} {questionType}
-            </p>
-          </div>
+          {/* Milestone progress bar — full width of the HUD column, labels always visible */}
+          <ProgressBar
+            current={currentCount}
+            target={milestoneThreshold}
+            priceYes={priceYes}
+            priceNo={priceNo}
+            userHasPosition={userHasPosition}
+            animate={barAnimate}
+            showLabels
+          />
 
           {/* Trade panel or halted badge */}
           {isTrading ? (
             <TradePanel
               marketId={id}
               prices={[priceYes, priceNo]}
+              quantities={[quantityYes, quantityNo]}
+              bParameter={bParameter}
             />
           ) : (
             <div className="px-3 py-2 rounded-lg bg-amber-500/10 text-amber-400 text-sm text-center">
@@ -449,13 +555,20 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
           ) : null}
         </div>
 
-        {/* Top-right progress ring */}
-        <div className="absolute top-4 right-4 z-10">
-          <ProgressRing current={currentCount} target={milestoneThreshold} />
+        {/* Milestone progress bar — full bleed, sits just above the video scrubber */}
+        <div className="absolute bottom-[108px] left-0 right-0 z-20">
+          <ProgressBar
+            current={currentCount}
+            target={milestoneThreshold}
+            priceYes={priceYes}
+            priceNo={priceNo}
+            userHasPosition={userHasPosition}
+            animate={barAnimate}
+          />
         </div>
 
-        {/* Video progress bar */}
-        <div className="absolute bottom-[108px] left-0 right-0 h-[2px] bg-white/20 z-20 pointer-events-none">
+        {/* Video playback scrubber */}
+        <div className="absolute bottom-[102px] left-0 right-0 h-[2px] bg-white/20 z-20 pointer-events-none">
           <div
             className="h-full bg-white"
             style={{ width: `${progress * 100}%`, transition: 'none' }}

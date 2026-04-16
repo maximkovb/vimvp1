@@ -5,6 +5,7 @@ import { Drawer } from "vaul";
 import useSWR from "swr";
 import { marketFetcher } from "@/lib/market-fetcher";
 import { TradePanel, type TradeResult } from "./TradePanel";
+export type { TradeResult };
 import { PriceChart } from "./PriceChart";
 import { SellButton } from "./SellButton";
 import type { MarketData } from "@/types/market";
@@ -18,6 +19,7 @@ interface BetSheetProps {
   initialOutcome?: number;
   title: string;
   containerRef?: React.RefObject<HTMLDivElement | null>;
+  onTradeSuccess?: (result: TradeResult) => void;
 }
 
 export function BetSheet({
@@ -28,6 +30,7 @@ export function BetSheet({
   initialOutcome,
   title,
   containerRef,
+  onTradeSuccess,
 }: BetSheetProps) {
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -42,6 +45,11 @@ export function BetSheet({
   const livePrices: number[] = marketData
     ? [marketData.priceYes, marketData.priceNo]
     : prices;
+
+  const liveQuantities: number[] = marketData
+    ? [marketData.quantityYes, marketData.quantityNo]
+    : [0, 0];
+  const liveBParameter: number = marketData?.bParameter ?? 0;
 
   const chartData: { time: UTCTimestamp; value: number }[] = marketData?.priceHistory
     ? marketData.priceHistory.map((p) => ({
@@ -68,7 +76,8 @@ export function BetSheet({
     };
   }, [open, containerRef]);
 
-  function handleTradeSuccess(_result: TradeResult) {
+  function handleTradeSuccess(result: TradeResult) {
+    onTradeSuccess?.(result);
     // Auto-dismiss after 1.5s
     successTimerRef.current = setTimeout(() => {
       onOpenChange(false);
@@ -116,6 +125,8 @@ export function BetSheet({
             <TradePanel
               marketId={marketId}
               prices={livePrices}
+              quantities={liveQuantities}
+              bParameter={liveBParameter}
               initialOutcome={initialOutcome}
               onTradeSuccess={handleTradeSuccess}
             />

@@ -1,11 +1,19 @@
 "use client";
 
 import { useState, useRef, useEffect, createRef, useMemo, useCallback, type RefObject } from "react";
+import useSWR from "swr";
 import { FeedCard, type FeedCardHandle } from "./FeedCard";
 import { FeedEndGrid } from "./FeedEndGrid";
 import { BetSheet } from "./BetSheet";
 import { getMarketPrices } from "@/lib/market-utils";
 import type { MarketStatus, QuestionType } from "@/db/schema";
+import type { TradeResult } from "./BetSheet";
+
+async function pollFetcher(url: string): Promise<PollData[]> {
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`poll fetch failed: ${res.status}`);
+  return res.json();
+}
 
 interface FeedMarket {
   id: string;
@@ -32,8 +40,8 @@ interface FeedMarket {
 
 interface PollData {
   marketId: string;
-  viewCount: bigint | null;
-  likeCount: bigint | null;
+  viewCount: number | null;
+  likeCount: number | null;
 }
 
 interface DiscoverFeedProps {
@@ -41,6 +49,7 @@ interface DiscoverFeedProps {
   gridMarkets: FeedMarket[];
   pollData: PollData[];
   trendingIds: string[];
+  userPositionIds?: string[];
 }
 
 interface SheetState {
@@ -64,8 +73,20 @@ export function DiscoverFeed({
   gridMarkets,
   pollData,
   trendingIds,
+  userPositionIds,
 }: DiscoverFeedProps) {
+  // Live poll data — refreshes every 60s so the ProgressRing stays current.
+  // Falls back to the server-rendered pollData prop on the initial render.
+  const { data: livePollData } = useSWR<PollData[]>(
+    "/api/feed/polls",
+    pollFetcher,
+    { refreshInterval: 60_000, fallbackData: pollData, revalidateOnFocus: false }
+  );
+
   const [sheet, setSheet] = useState<SheetState>(CLOSED_SHEET);
+  // Live price overrides — written immediately after a trade so the feed bar
+  // reflects the new YES/NO split before the next SSR revalidation.
+  const [livePrices, setLivePrices] = useState<Map<string, [number, number]>>(new Map);
   const feedColumnRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const activeIdxRef = useRef<number>(-1);
@@ -130,10 +151,13 @@ export function DiscoverFeed({
   // O(1) trending lookup — rebuild only when trendingIds array reference changes.
   const trendingSet = useMemo(() => new Set(trendingIds), [trendingIds]);
 
-  // Stable poll lookup — keyed by marketId.
+  // O(1) position lookup — which feed markets the logged-in user holds shares in.
+  const positionSet = useMemo(() => new Set(userPositionIds ?? []), [userPositionIds]);
+
+  // Stable poll lookup — keyed by marketId. Rebuilds when livePollData updates.
   const pollMap = useMemo(
-    () => new Map(pollData.map((p) => [p.marketId, p] as const)),
-    [pollData]
+    () => new Map((livePollData ?? pollData).map((p) => [p.marketId, p] as const)),
+    [livePollData, pollData]
   );
 
   // Pre-compute prices once per market per render cycle so FeedCard receives stable values.
@@ -162,6 +186,20 @@ export function DiscoverFeed({
 
   const closeSheet = useCallback(() => setSheet(CLOSED_SHEET), []);
 
+  // Called by BetSheet when a trade completes. Derive new priceYes/priceNo from
+  // the TradeResult and write them into the live override map so the feed bar
+  // updates immediately with a 0.3s transition (no page reload needed).
+  // TradeResult.priceAfter = new price of the TRADED outcome (outcome 0=YES, 1=NO).
+  // The other outcome is derived as 1 - priceAfter (LMSR approximation, fine for display).
+  const handleTradeSuccess = useCallback((result: TradeResult) => {
+    const newPriceYes = result.outcome === 0 ? result.priceAfter : 1 - result.priceAfter;
+    setLivePrices((prev) => {
+      const next = new Map(prev);
+      next.set(sheet.marketId, [newPriceYes, 1 - newPriceYes]);
+      return next;
+    });
+  }, [sheet.marketId]);
+
   return (
     <>
       {/* Feed column — snap scroll container */}
@@ -171,7 +209,8 @@ export function DiscoverFeed({
       >
         {feedMarkets.map((market, index) => {
           const poll = pollMap.get(market.id);
-          const prices = pricesByMarketId.get(market.id) ?? [0.5, 0.5];
+          // Live overrides take priority — written immediately post-trade for instant bar feedback.
+          const prices = livePrices.get(market.id) ?? pricesByMarketId.get(market.id) ?? [0.5, 0.5];
           const currentCount =
             poll
               ? market.questionType === "likes"
@@ -190,10 +229,14 @@ export function DiscoverFeed({
                 milestoneThreshold={market.milestoneThreshold}
                 priceYes={prices[0]}
                 priceNo={prices[1]}
+                quantityYes={parseFloat(market.quantityYes)}
+                quantityNo={parseFloat(market.quantityNo)}
+                bParameter={parseFloat(market.bParameter)}
                 videoId={market.videoId}
                 videoMetadata={market.videoMetadata}
                 currentCount={currentCount}
                 isTrending={trendingSet.has(market.id)}
+                userHasPosition={positionSet.has(market.id)}
                 priority={index < 2}
                 onTap={cardTapHandlers[index]}
               />
@@ -216,6 +259,7 @@ export function DiscoverFeed({
         initialOutcome={sheet.initialOutcome}
         title={sheet.title}
         containerRef={feedColumnRef}
+        onTradeSuccess={handleTradeSuccess}
       />
     </>
   );

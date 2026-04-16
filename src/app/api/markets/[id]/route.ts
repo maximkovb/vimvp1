@@ -5,6 +5,9 @@ import { eq, desc, and } from "drizzle-orm";
 import { allPrices } from "@/lib/lmsr";
 import { auth } from "@/lib/auth";
 
+// Always dynamic — never cache poll/price data in Next.js's route cache.
+export const dynamic = "force-dynamic";
+
 // GET /api/markets/[id] — returns single market state with price history
 export async function GET(
   req: Request,
@@ -75,7 +78,7 @@ export async function GET(
       }
     : null;
 
-  return NextResponse.json({
+  const payload = {
     id: market.id,
     title: market.title,
     description: market.description,
@@ -86,6 +89,9 @@ export async function GET(
     videoMetadata: market.videoMetadata,
     priceYes,
     priceNo,
+    quantityYes: quantities[0],
+    quantityNo: quantities[1],
+    bParameter: b,
     outcome: market.outcome,
     resolvesAt: market.resolvesAt,
     resolvedAt: market.resolvedAt,
@@ -110,5 +116,9 @@ export async function GET(
       likeCount: p.likeCount !== null ? Number(p.likeCount) : null,
     })),
     userPosition,
+  };
+
+  return NextResponse.json(payload, {
+    headers: { "Cache-Control": "no-store" },
   });
 }

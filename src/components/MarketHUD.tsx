@@ -1,8 +1,7 @@
 "use client";
 
-import useSWR, { useSWRConfig } from "swr";
+import { useSWRConfig } from "swr";
 import { useState, useEffect, useRef } from "react";
-import type { UTCTimestamp } from "lightweight-charts";
 import type { Session } from "next-auth";
 import type { MarketData } from "@/types/market";
 import { TradePanel } from "@/components/TradePanel";
@@ -17,7 +16,7 @@ import { PostTradeShareCard } from "@/components/PostTradeShareCard";
 import type { PostTradeResult } from "@/components/PostTradeShareCard";
 import { ResolutionShareCard } from "@/components/ResolutionShareCard";
 import type { UserPosition } from "@/lib/actions/trade";
-import { marketFetcher } from "@/lib/market-fetcher";
+import { useMarketData } from "@/hooks/useMarketData";
 
 interface MarketHUDProps {
   marketId: string;
@@ -28,19 +27,9 @@ interface MarketHUDProps {
 export function MarketHUD({ marketId, session, initialData }: MarketHUDProps) {
   const { mutate: globalMutate } = useSWRConfig();
 
-  const { data, mutate, isValidating } = useSWR<MarketData>(
-    `/api/markets/${marketId}`,
-    marketFetcher,
-    {
-      refreshInterval: (latestData) => {
-        const status = latestData?.status ?? initialData.status;
-        return status === "halted" || status === "resolving" ? 10_000 : 60_000;
-      },
-      fallbackData: initialData,
-    }
-  );
+  const { data, mutate, isValidating } = useMarketData(marketId, initialData);
 
-  const market = data!;
+  const market = data ?? initialData;
 
   // Track when data was last successfully fetched
   const [lastFetched, setLastFetched] = useState(() => new Date());
@@ -169,6 +158,8 @@ export function MarketHUD({ marketId, session, initialData }: MarketHUDProps) {
             <TradePanel
               marketId={market.id}
               prices={prices}
+              quantities={[market.quantityYes, market.quantityNo]}
+              bParameter={market.bParameter}
               onTradeSuccess={handleTradeSuccess}
             />
             {userPosition && (
