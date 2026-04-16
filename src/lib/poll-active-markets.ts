@@ -1,17 +1,21 @@
 import { db } from "@/db";
 import { markets, tiktokPolls } from "@/db/schema";
-import { and, or, eq, sql } from "drizzle-orm";
+import { and, or, eq, sql, lte, desc } from "drizzle-orm";
 import { fetchTikTokStatsById } from "@/lib/tiktok";
 import { TIKTOK_THUMBNAIL_RE, TIKTOK_PLAY_URL_RE } from "@/lib/constants";
 import { resolveMarket } from "@/lib/oracle";
+import { computeProjectionLabel } from "@/lib/projection";
 
 export interface PollResult {
   polled: number;
   nullStats?: number;
   skipped: number;
+  budgetExceeded?: number;
   earlyResolved?: number;
-  errors?: string[];
-  resolveErrors?: string[];
+  /** Count of per-market fetch errors. Full details are in server logs. */
+  errorCount?: number;
+  /** Count of auto-resolve errors. Full details are in server logs. */
+  resolveErrorCount?: number;
   details: { id: string; videoId: string; views: number | null; likes: number | null }[];
   skipReasons?: {
     id: string;
@@ -39,6 +43,10 @@ function shouldPoll(
   // Do not "correct" this to 10 min — the intentional mismatch is the fix.
   return Date.now() - lastPollAt.getTime() >= 9 * 60 * 1000;
 }
+
+// Leave a 10-second buffer before Vercel's 60-second cron maxDuration.
+// The loop breaks early and logs skipped count rather than getting killed silently.
+const MAX_POLL_DURATION_MS = 50_000;
 
 /**
  * Polls TikTok stats for all active and halted markets.
@@ -99,14 +107,24 @@ export async function pollAllActiveMarkets(force = false): Promise<PollResult> {
   let polledCount = 0;
   let nullStatsCount = 0;
   let earlyResolvedCount = 0;
-  const errors: string[] = [];
-  const resolveErrors: string[] = [];
+  let errorCount = 0;
+  let resolveErrorCount = 0;
+  let budgetExceededCount = 0;
   const details: { id: string; videoId: string; views: number | null; likes: number | null }[] =
     [];
 
+  const pollStartTime = Date.now();
+
   for (const market of marketsToPoll) {
+    if (Date.now() - pollStartTime > MAX_POLL_DURATION_MS) {
+      budgetExceededCount = marketsToPoll.length - polledCount - errorCount;
+      console.warn(`[poll] Budget exceeded — skipped ${budgetExceededCount} remaining markets`);
+      break;
+    }
     try {
-      const stats = await fetchTikTokStatsById(market.videoId);
+      // tikapiPostId is TikWM's canonical video ID (returned from d.id); fall back to videoId
+      const pollVideoId = market.tikapiPostId ?? market.videoId;
+      const stats = await fetchTikTokStatsById(pollVideoId);
 
       // Only persist a poll row when we have real data — null rows (TikWM failure,
       // deleted/private video) would poison pollHistory and blank the UI.
@@ -160,6 +178,46 @@ export async function pollAllActiveMarkets(force = false): Promise<PollResult> {
         }
       }
 
+      // Compute and persist projection label
+      if (stats !== null && market.resolvesAt) {
+        try {
+          const currentMetric =
+            market.questionType === "views" ? stats.viewCount : stats.likeCount;
+          const threshold = Number(market.milestoneThreshold);
+
+          const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+          const [oldPoll] = await db
+            .select({ viewCount: tiktokPolls.viewCount, likeCount: tiktokPolls.likeCount })
+            .from(tiktokPolls)
+            .where(
+              and(
+                eq(tiktokPolls.marketId, market.id),
+                lte(tiktokPolls.polledAt, twentyFourHoursAgo)
+              )
+            )
+            .orderBy(desc(tiktokPolls.polledAt))
+            .limit(1);
+
+          const oldMetric = oldPoll
+            ? Number(market.questionType === "views" ? oldPoll.viewCount : oldPoll.likeCount)
+            : null;
+
+          const label = computeProjectionLabel({
+            currentMetric,
+            metric24hAgo: oldMetric,
+            milestoneThreshold: threshold,
+            resolvesAt: market.resolvesAt,
+          });
+
+          await db
+            .update(markets)
+            .set({ projectionLabel: label })
+            .where(eq(markets.id, market.id));
+        } catch (err) {
+          console.error(`[poll] projection label failed for ${market.id}:`, err);
+        }
+      }
+
       // Auto-resolve if milestone crossed
       if (stats !== null) {
         const metric =
@@ -191,7 +249,7 @@ export async function pollAllActiveMarkets(force = false): Promise<PollResult> {
           } catch (resolveErr) {
             const msg = resolveErr instanceof Error ? resolveErr.message : String(resolveErr);
             console.error(`Early resolve failed for market ${market.id}:`, msg);
-            resolveErrors.push(`${market.id}: ${msg}`);
+            resolveErrorCount++;
           }
         }
       }
@@ -203,7 +261,7 @@ export async function pollAllActiveMarkets(force = false): Promise<PollResult> {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`TikTok poll failed for market ${market.id}:`, msg);
-      errors.push(`${market.id}: ${msg}`);
+      errorCount++;
       // Continue to next market — don't abort the whole poll on one failure
     }
   }
@@ -212,9 +270,10 @@ export async function pollAllActiveMarkets(force = false): Promise<PollResult> {
     polled: polledCount,
     ...(nullStatsCount > 0 && { nullStats: nullStatsCount }),
     skipped: activeMarkets.length - marketsToPoll.length,
+    ...(budgetExceededCount > 0 && { budgetExceeded: budgetExceededCount }),
     ...(earlyResolvedCount > 0 && { earlyResolved: earlyResolvedCount }),
-    ...(errors.length > 0 && { errors }),
-    ...(resolveErrors.length > 0 && { resolveErrors }),
+    ...(errorCount > 0 && { errorCount }),
+    ...(resolveErrorCount > 0 && { resolveErrorCount }),
     details,
   };
 }

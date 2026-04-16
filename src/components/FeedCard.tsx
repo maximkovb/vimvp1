@@ -4,7 +4,7 @@ import Image from "next/image";
 import { useState, useRef, forwardRef, useImperativeHandle, useEffect, memo } from "react";
 import { TIKTOK_THUMBNAIL_RE } from "@/lib/constants";
 import { TradePanel } from "./TradePanel";
-import type { MarketStatus, QuestionType } from "@/db/schema";
+import type { MarketStatus, QuestionType, ProjectionLabel } from "@/db/schema";
 
 export interface FeedCardHandle {
   activate(): void;
@@ -32,6 +32,7 @@ interface FeedCardProps {
   } | null;
   currentCount: number | null; // latest viewCount or likeCount from tiktokPolls
   isTrending: boolean;
+  projectionLabel?: ProjectionLabel | null;
   userHasPosition?: boolean;
   priority?: boolean;
   onTap: (initialOutcome?: number) => void;
@@ -43,6 +44,12 @@ function formatCount(n: number | null) {
   if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
   return n.toString();
 }
+
+const PROJECTION_BADGE: Record<ProjectionLabel, { label: string; className: string }> = {
+  ON_TRACK:     { label: "On Track",     className: "bg-green-500/20 text-green-400 border border-green-500/40" },
+  AT_RISK:      { label: "At Risk",      className: "bg-amber-500/20 text-amber-400 border border-amber-500/40" },
+  BREAKING_OUT: { label: "Breaking Out", className: "bg-purple-500/20 text-purple-400 border border-purple-500/40" },
+};
 
 function formatTarget(n: number) {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(0)}M`;
@@ -227,6 +234,7 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
   videoMetadata,
   currentCount,
   isTrending,
+  projectionLabel,
   userHasPosition,
   priority = false,
   onTap,
@@ -426,16 +434,23 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
 
         {/* Right: side HUD */}
         <div className="flex flex-col gap-5 w-[360px] flex-shrink-0 overflow-y-auto max-h-screen py-8">
-          {/* Status badge */}
-          {(status === "halted" || status === "resolving") ? (
-            <span className="self-start px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/40 uppercase tracking-wide">
-              {status === "resolving" ? "Resolving" : "Halted"}
-            </span>
-          ) : isTrending ? (
-            <span className="self-start px-2.5 py-1 rounded-full text-xs font-semibold bg-accent/20 text-accent border border-accent/40 uppercase tracking-wide">
-              Trending
-            </span>
-          ) : null}
+          {/* Status + projection badges */}
+          <div className="flex flex-wrap gap-1.5 items-start">
+            {(status === "halted" || status === "resolving") ? (
+              <span className="self-start px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/40 uppercase tracking-wide">
+                {status === "resolving" ? "Resolving" : "Halted"}
+              </span>
+            ) : isTrending ? (
+              <span className="self-start px-2.5 py-1 rounded-full text-xs font-semibold bg-accent/20 text-accent border border-accent/40 uppercase tracking-wide">
+                Trending
+              </span>
+            ) : null}
+            {projectionLabel && (
+              <span className={`self-start px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${PROJECTION_BADGE[projectionLabel].className}`}>
+                {PROJECTION_BADGE[projectionLabel].label}
+              </span>
+            )}
+          </div>
 
           {/* Creator + title */}
           <div>
@@ -542,8 +557,8 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
           }}
         />
 
-        {/* Top-left badge */}
-        <div className="absolute top-4 left-4 z-10">
+        {/* Top-left badges — status + projection stacked */}
+        <div className="absolute top-4 left-4 z-10 flex flex-col gap-1.5 items-start">
           {(status === "halted" || status === "resolving") ? (
             <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/40 uppercase tracking-wide">
               {status === "resolving" ? "Resolving" : "Halted"}
@@ -553,6 +568,11 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
               Trending
             </span>
           ) : null}
+          {projectionLabel && (
+            <span className={`px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${PROJECTION_BADGE[projectionLabel].className}`}>
+              {PROJECTION_BADGE[projectionLabel].label}
+            </span>
+          )}
         </div>
 
         {/* Milestone progress bar — full bleed, sits just above the video scrubber */}

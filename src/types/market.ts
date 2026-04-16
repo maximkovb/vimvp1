@@ -1,4 +1,4 @@
-import type { MarketStatus, QuestionType } from "@/db/schema";
+import type { MarketStatus, QuestionType, ProjectionLabel } from "@/db/schema";
 
 export interface MarketData {
   id: string;
@@ -50,4 +50,5 @@ export interface MarketData {
   /** Authenticated user's current position in this market, or null if none / unauthenticated.
    *  Only present in responses from GET /api/markets/[id]. */
   userPosition?: { outcome: number; shares: number; avgCostBasis: number } | null;
+  projectionLabel?: ProjectionLabel | null;
 }

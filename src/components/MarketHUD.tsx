@@ -17,6 +17,8 @@ import type { PostTradeResult } from "@/components/PostTradeShareCard";
 import { ResolutionShareCard } from "@/components/ResolutionShareCard";
 import type { UserPosition } from "@/lib/actions/trade";
 import { useMarketData } from "@/hooks/useMarketData";
+import { PROJECTION_EXPLANATIONS } from "@/lib/projection";
+import type { ProjectionLabel } from "@/db/schema";
 
 interface MarketHUDProps {
   marketId: string;
@@ -123,6 +125,27 @@ export function MarketHUD({ marketId, session, initialData }: MarketHUDProps) {
           </div>
         </div>
       </div>
+
+      {/* Projection badge + explanation */}
+      {market.projectionLabel && (() => {
+        const label = market.projectionLabel as ProjectionLabel;
+        const styles: Record<ProjectionLabel, string> = {
+          ON_TRACK:     "bg-green-500/20 text-green-400 border border-green-500/40",
+          AT_RISK:      "bg-amber-500/20 text-amber-400 border border-amber-500/40",
+          BREAKING_OUT: "bg-purple-500/20 text-purple-400 border border-purple-500/40",
+        };
+        const display: Record<ProjectionLabel, string> = {
+          ON_TRACK: "On Track", AT_RISK: "At Risk", BREAKING_OUT: "Breaking Out",
+        };
+        return (
+          <div className="flex items-center gap-2 mb-3">
+            <span className={`px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${styles[label]}`}>
+              {display[label]}
+            </span>
+            <span className="text-xs text-muted">{PROJECTION_EXPLANATIONS[label]}</span>
+          </div>
+        );
+      })()}
 
       {/* Status-driven action slot */}
       <div className="relative">

@@ -116,6 +116,7 @@ export async function GET(
       likeCount: p.likeCount !== null ? Number(p.likeCount) : null,
     })),
     userPosition,
+    projectionLabel: market.projectionLabel ?? null,
   };
 
   return NextResponse.json(payload, {

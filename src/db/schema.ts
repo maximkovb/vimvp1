@@ -86,6 +86,8 @@ export type MarketStatus =
 
 export type QuestionType = "views" | "likes";
 
+export type ProjectionLabel = "ON_TRACK" | "AT_RISK" | "BREAKING_OUT";
+
 export const markets = pgTable(
   "markets",
   {
@@ -115,6 +117,7 @@ export const markets = pgTable(
     haltsAt: timestamp("halts_at", { mode: "date" }),
     resolvesAt: timestamp("resolves_at", { mode: "date" }),
     resolvedAt: timestamp("resolved_at", { mode: "date" }),
+    projectionLabel: text("projection_label").$type<ProjectionLabel>(),
     createdBy: text("created_by").references(() => users.id),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
   },

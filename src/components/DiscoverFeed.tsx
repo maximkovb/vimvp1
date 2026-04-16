@@ -6,7 +6,7 @@ import { FeedCard, type FeedCardHandle } from "./FeedCard";
 import { FeedEndGrid } from "./FeedEndGrid";
 import { BetSheet } from "./BetSheet";
 import { getMarketPrices } from "@/lib/market-utils";
-import type { MarketStatus, QuestionType } from "@/db/schema";
+import type { MarketStatus, QuestionType, ProjectionLabel } from "@/db/schema";
 import type { TradeResult } from "./BetSheet";
 
 async function pollFetcher(url: string): Promise<PollData[]> {
@@ -36,6 +36,7 @@ interface FeedMarket {
   quantityYes: string;
   quantityNo: string;
   bParameter: string;
+  projectionLabel?: ProjectionLabel | null;
 }
 
 interface PollData {
@@ -238,6 +239,7 @@ export function DiscoverFeed({
                 isTrending={trendingSet.has(market.id)}
                 userHasPosition={positionSet.has(market.id)}
                 priority={index < 2}
+                projectionLabel={market.projectionLabel ?? null}
                 onTap={cardTapHandlers[index]}
               />
             </div>
