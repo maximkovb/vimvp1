@@ -392,6 +392,7 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
                   className="absolute inset-0 w-full h-full object-cover rounded-xl cursor-pointer"
                   onClick={(e) => { e.stopPropagation(); togglePause(); }}
                   onError={handleVideoError}
+                  onStalled={handleVideoError}
                   onTimeUpdate={(e) => {
                     const v = e.currentTarget;
                     if (v.duration > 0) setProgress(v.currentTime / v.duration);
