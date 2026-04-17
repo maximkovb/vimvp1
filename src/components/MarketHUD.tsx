@@ -19,6 +19,7 @@ import type { UserPosition } from "@/lib/actions/trade";
 import { useMarketData } from "@/hooks/useMarketData";
 import { PROJECTION_EXPLANATIONS } from "@/lib/projection";
 import type { ProjectionLabel } from "@/db/schema";
+import { ResolutionRulesAccordion } from "@/components/ResolutionRulesAccordion";
 
 interface MarketHUDProps {
   marketId: string;
@@ -146,6 +147,9 @@ export function MarketHUD({ marketId, session, initialData }: MarketHUDProps) {
           </div>
         );
       })()}
+
+      {/* Resolution rules accordion */}
+      <ResolutionRulesAccordion market={market} />
 
       {/* Status-driven action slot */}
       <div className="relative">

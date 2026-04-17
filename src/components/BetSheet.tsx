@@ -10,6 +10,7 @@ import { PriceChart } from "./PriceChart";
 import { SellButton } from "./SellButton";
 import type { MarketData } from "@/types/market";
 import type { UTCTimestamp } from "lightweight-charts";
+import { deriveResolutionRules } from "@/lib/resolution-rules";
 
 interface BetSheetProps {
   open: boolean;
@@ -109,6 +110,19 @@ export function BetSheet({
           <div className="px-5 pb-3 shrink-0 border-b border-border">
             <p className="text-sm text-muted line-clamp-2">{title}</p>
           </div>
+
+          {/* Resolution rules one-liner — pinned, non-collapsible */}
+          {marketData === undefined ? (
+            <div className="px-5 py-2.5 shrink-0 border-b border-border">
+              <div className="h-3.5 bg-border rounded animate-pulse w-3/4" />
+            </div>
+          ) : marketData.status !== 'cancelled' && marketData.status !== 'failed' ? (
+            <div className="px-5 py-2.5 shrink-0 border-b border-border">
+              <p className="text-xs text-muted">
+                {deriveResolutionRules(marketData).yesCondition}
+              </p>
+            </div>
+          ) : null}
 
           {/* Scrollable body */}
           <div className="overflow-y-auto flex-1 p-5 flex flex-col gap-5">
