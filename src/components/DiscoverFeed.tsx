@@ -8,6 +8,7 @@ import { BetSheet } from "./BetSheet";
 import { getMarketPrices } from "@/lib/market-utils";
 import type { MarketStatus, QuestionType, ProjectionLabel } from "@/db/schema";
 import type { TradeResult } from "./BetSheet";
+import { useScrollVelocity } from "@/hooks/useScrollVelocity";
 
 async function pollFetcher(url: string): Promise<PollData[]> {
   const res = await fetch(url, { cache: "no-store" });
@@ -90,6 +91,9 @@ export function DiscoverFeed({
   const sentinelRef = useRef<HTMLDivElement>(null);
   const activeIdxRef = useRef<number>(-1);
 
+  // Scroll velocity → density signal for the active card's metric display
+  const density = useScrollVelocity(feedColumnRef);
+
   // Ref array resizes to match feedMarkets exactly — prevents stale refs when markets are added/removed.
   const cardRefs = useRef<RefObject<FeedCardHandle | null>[]>([]);
   if (cardRefs.current.length !== feedMarkets.length) {
@@ -146,6 +150,15 @@ export function DiscoverFeed({
 
     return () => observer.disconnect();
   }, [feedMarkets.length]);
+
+  // Dispatch density to the active card only. Freeze while BetSheet is open (density
+  // changes are invisible behind the sheet and would cause a flash on close).
+  useEffect(() => {
+    if (sheet.open) return;
+    const idx = activeIdxRef.current;
+    if (idx === -1) return;
+    cardRefs.current[idx]?.current?.setDensity(density);
+  }, [density, sheet.open]);
 
   // O(1) position lookup — which feed markets the logged-in user holds shares in.
   const positionSet = useMemo(() => new Set(userPositionIds ?? []), [userPositionIds]);

@@ -6,10 +6,12 @@ import { TIKTOK_THUMBNAIL_RE } from "@/lib/constants";
 import { TradePanel } from "./TradePanel";
 import type { MarketStatus, QuestionType, ProjectionLabel } from "@/db/schema";
 import { deriveResolutionRules } from "@/lib/resolution-rules";
+import type { Density } from "@/hooks/useScrollVelocity";
 
 export interface FeedCardHandle {
   activate(): void;
   deactivate(): void;
+  setDensity(density: Density): void;
 }
 
 interface FeedCardProps {
@@ -248,13 +250,20 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
   // Progress bar animation — fires once on first activate(), then stays true for the
   // lifetime of the component (no re-animation on scroll-back, resets on page refresh).
   const [barAnimate, setBarAnimate] = useState(false);
+  const [densityState, setDensityState] = useState<Density>("full");
   const barAnimatedRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const desktopVideoRef = useRef<HTMLVideoElement>(null);
   const playPromiseRef = useRef<Promise<void> | null>(null);
 
   useImperativeHandle(ref, () => ({
+    setDensity(density: Density) {
+      setDensityState(density);
+    },
     activate() {
+      // Reset density to full on re-activation — prevents stale minimal/compact state
+      // persisting from a previous fast-swipe-past
+      setDensityState("full");
       const isDesktop = window.matchMedia('(min-width: 1024px)').matches;
       const activeV = isDesktop ? desktopVideoRef.current : videoRef.current;
       const inactiveV = isDesktop ? videoRef.current : desktopVideoRef.current;
