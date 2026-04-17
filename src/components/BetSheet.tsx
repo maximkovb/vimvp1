@@ -52,6 +52,13 @@ export function BetSheet({
     : [0, 0];
   const liveBParameter: number = marketData?.bParameter ?? 0;
 
+  const resolutionTooltips =
+    marketData &&
+    marketData.status !== "cancelled" &&
+    marketData.status !== "failed"
+      ? deriveResolutionRules(marketData)
+      : null;
+
   const chartData: { time: UTCTimestamp; value: number }[] = marketData?.priceHistory
     ? marketData.priceHistory.map((p) => ({
         time: (new Date(p.time).getTime() / 1000) as UTCTimestamp,
@@ -111,19 +118,6 @@ export function BetSheet({
             <p className="text-sm text-muted line-clamp-2">{title}</p>
           </div>
 
-          {/* Resolution rules one-liner — pinned, non-collapsible */}
-          {marketData === undefined ? (
-            <div className="px-5 py-2.5 shrink-0 border-b border-border">
-              <div className="h-3.5 bg-border rounded animate-pulse w-3/4" />
-            </div>
-          ) : marketData.status !== 'cancelled' && marketData.status !== 'failed' ? (
-            <div className="px-5 py-2.5 shrink-0 border-b border-border">
-              <p className="text-xs text-muted">
-                {deriveResolutionRules(marketData).yesCondition}
-              </p>
-            </div>
-          ) : null}
-
           {/* Scrollable body */}
           <div className="overflow-y-auto flex-1 p-5 flex flex-col gap-5">
             {/* Price chart */}
@@ -142,6 +136,8 @@ export function BetSheet({
               quantities={liveQuantities}
               bParameter={liveBParameter}
               initialOutcome={initialOutcome}
+              yesTooltip={resolutionTooltips?.yesCondition}
+              noTooltip={resolutionTooltips?.noCondition}
               onTradeSuccess={handleTradeSuccess}
             />
 

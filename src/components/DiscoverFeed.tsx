@@ -49,7 +49,6 @@ interface DiscoverFeedProps {
   feedMarkets: FeedMarket[];
   gridMarkets: FeedMarket[];
   pollData: PollData[];
-  trendingIds: string[];
   userPositionIds?: string[];
 }
 
@@ -73,7 +72,6 @@ export function DiscoverFeed({
   feedMarkets,
   gridMarkets,
   pollData,
-  trendingIds,
   userPositionIds,
 }: DiscoverFeedProps) {
   // Live poll data — refreshes every 60s so the ProgressRing stays current.
@@ -148,9 +146,6 @@ export function DiscoverFeed({
 
     return () => observer.disconnect();
   }, [feedMarkets.length]);
-
-  // O(1) trending lookup — rebuild only when trendingIds array reference changes.
-  const trendingSet = useMemo(() => new Set(trendingIds), [trendingIds]);
 
   // O(1) position lookup — which feed markets the logged-in user holds shares in.
   const positionSet = useMemo(() => new Set(userPositionIds ?? []), [userPositionIds]);
@@ -236,7 +231,7 @@ export function DiscoverFeed({
                 videoId={market.videoId}
                 videoMetadata={market.videoMetadata}
                 currentCount={currentCount}
-                isTrending={trendingSet.has(market.id)}
+                resolvesAt={market.resolvesAt?.toISOString() ?? null}
                 userHasPosition={positionSet.has(market.id)}
                 priority={index < 2}
                 projectionLabel={market.projectionLabel ?? null}

@@ -25,6 +25,8 @@ export interface TradePanelProps {
   bParameter: number;
   userBalance?: number;   // slider max cap; falls back to 500
   initialOutcome?: number;
+  yesTooltip?: string;
+  noTooltip?: string;
   onTradeSuccess?: (result: TradeResult) => void;
 }
 
@@ -35,6 +37,8 @@ export function TradePanel({
   bParameter,
   userBalance,
   initialOutcome,
+  yesTooltip,
+  noTooltip,
   onTradeSuccess,
 }: TradePanelProps) {
   const [outcome, setOutcome] = useState<number>(initialOutcome ?? 0);
@@ -132,26 +136,40 @@ export function TradePanel({
 
       {/* Outcome selector */}
       <div className="flex gap-2 mb-5">
-        <button
-          onClick={() => handleOutcomeChange(0)}
-          className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
-            outcome === 0
-              ? "bg-green text-white"
-              : "bg-green/10 text-green hover:bg-green/20"
-          }`}
-        >
-          YES {(prices[0] * 100).toFixed(0)}%
-        </button>
-        <button
-          onClick={() => handleOutcomeChange(1)}
-          className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
-            outcome === 1
-              ? "bg-red text-white"
-              : "bg-red/10 text-red hover:bg-red/20"
-          }`}
-        >
-          NO {(prices[1] * 100).toFixed(0)}%
-        </button>
+        <div className="relative flex-1 group">
+          <button
+            onClick={() => handleOutcomeChange(0)}
+            className={`w-full py-2 rounded-lg text-sm font-medium transition-colors ${
+              outcome === 0
+                ? "bg-green text-white"
+                : "bg-green/10 text-green hover:bg-green/20"
+            }`}
+          >
+            YES {(prices[0] * 100).toFixed(0)}%
+          </button>
+          {yesTooltip && (
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-black/90 text-white text-xs rounded-lg px-3 py-2 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-50 text-center leading-snug whitespace-normal">
+              {yesTooltip}
+            </div>
+          )}
+        </div>
+        <div className="relative flex-1 group">
+          <button
+            onClick={() => handleOutcomeChange(1)}
+            className={`w-full py-2 rounded-lg text-sm font-medium transition-colors ${
+              outcome === 1
+                ? "bg-red text-white"
+                : "bg-red/10 text-red hover:bg-red/20"
+            }`}
+          >
+            NO {(prices[1] * 100).toFixed(0)}%
+          </button>
+          {noTooltip && (
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-black/90 text-white text-xs rounded-lg px-3 py-2 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-50 text-center leading-snug whitespace-normal">
+              {noTooltip}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Coin amount slider */}

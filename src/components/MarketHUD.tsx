@@ -19,7 +19,7 @@ import type { UserPosition } from "@/lib/actions/trade";
 import { useMarketData } from "@/hooks/useMarketData";
 import { PROJECTION_EXPLANATIONS } from "@/lib/projection";
 import type { ProjectionLabel } from "@/db/schema";
-import { ResolutionRulesAccordion } from "@/components/ResolutionRulesAccordion";
+import { deriveResolutionRules } from "@/lib/resolution-rules";
 
 interface MarketHUDProps {
   marketId: string;
@@ -72,6 +72,10 @@ export function MarketHUD({ marketId, session, initialData }: MarketHUDProps) {
 
   const isUrgentStatus = market.status === "halted" || market.status === "resolving";
   const resolvesAt = market.resolvesAt ? new Date(market.resolvesAt) : null;
+  const resolutionTooltips =
+    market.status !== "cancelled" && market.status !== "failed"
+      ? deriveResolutionRules(market)
+      : null;
   const prices = [market.priceYes, market.priceNo];
 
   const volumeTotal =
@@ -148,9 +152,6 @@ export function MarketHUD({ marketId, session, initialData }: MarketHUDProps) {
         );
       })()}
 
-      {/* Resolution rules accordion */}
-      <ResolutionRulesAccordion market={market} />
-
       {/* Status-driven action slot */}
       <div className="relative">
         {isUrgentStatus ? (
@@ -187,6 +188,8 @@ export function MarketHUD({ marketId, session, initialData }: MarketHUDProps) {
               prices={prices}
               quantities={[market.quantityYes, market.quantityNo]}
               bParameter={market.bParameter}
+              yesTooltip={resolutionTooltips?.yesCondition}
+              noTooltip={resolutionTooltips?.noCondition}
               onTradeSuccess={handleTradeSuccess}
             />
             {userPosition && (

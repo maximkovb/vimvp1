@@ -5,6 +5,7 @@ import { useState, useRef, forwardRef, useImperativeHandle, useEffect, memo } fr
 import { TIKTOK_THUMBNAIL_RE } from "@/lib/constants";
 import { TradePanel } from "./TradePanel";
 import type { MarketStatus, QuestionType, ProjectionLabel } from "@/db/schema";
+import { deriveResolutionRules } from "@/lib/resolution-rules";
 
 export interface FeedCardHandle {
   activate(): void;
@@ -31,7 +32,7 @@ interface FeedCardProps {
     creatorId?: string | null;
   } | null;
   currentCount: number | null; // latest viewCount or likeCount from tiktokPolls
-  isTrending: boolean;
+  resolvesAt?: string | null;
   projectionLabel?: ProjectionLabel | null;
   userHasPosition?: boolean;
   priority?: boolean;
@@ -233,7 +234,7 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
   videoId,
   videoMetadata,
   currentCount,
-  isTrending,
+  resolvesAt,
   projectionLabel,
   userHasPosition,
   priority = false,
@@ -324,6 +325,14 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
       ? videoMetadata.thumbnail
       : null;
   const isTrading = status === "active";
+
+  const resolutionTooltips = isTrading
+    ? deriveResolutionRules({
+        milestoneThreshold: String(milestoneThreshold),
+        resolvesAt: resolvesAt ?? null,
+        questionType,
+      })
+    : null;
 
   async function handleVideoError() {
     if (refreshing) return;
@@ -441,10 +450,6 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
               <span className="self-start px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/40 uppercase tracking-wide">
                 {status === "resolving" ? "Resolving" : "Halted"}
               </span>
-            ) : isTrending ? (
-              <span className="self-start px-2.5 py-1 rounded-full text-xs font-semibold bg-accent/20 text-accent border border-accent/40 uppercase tracking-wide">
-                Trending
-              </span>
             ) : null}
             {projectionLabel && (
               <span className={`self-start px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${PROJECTION_BADGE[projectionLabel].className}`}>
@@ -479,6 +484,8 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
               prices={[priceYes, priceNo]}
               quantities={[quantityYes, quantityNo]}
               bParameter={bParameter}
+              yesTooltip={resolutionTooltips?.yesCondition}
+              noTooltip={resolutionTooltips?.noCondition}
             />
           ) : (
             <div className="px-3 py-2 rounded-lg bg-amber-500/10 text-amber-400 text-sm text-center">
@@ -563,10 +570,6 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
           {(status === "halted" || status === "resolving") ? (
             <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/40 uppercase tracking-wide">
               {status === "resolving" ? "Resolving" : "Halted"}
-            </span>
-          ) : isTrending ? (
-            <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-accent/20 text-accent border border-accent/40 uppercase tracking-wide">
-              Trending
             </span>
           ) : null}
           {projectionLabel && (
