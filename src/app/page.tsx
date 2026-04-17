@@ -26,7 +26,7 @@ export default async function HomePage() {
   const feedMarkets = [...resolvingSoon, ...mainMarkets];
 
   // Fetch latest poll per market via DISTINCT ON — uses tiktok_polls_market_polled_idx
-  let pollData: { marketId: string; viewCount: bigint | null; likeCount: bigint | null }[] = [];
+  let pollData: { marketId: string; viewCount: number | null; likeCount: number | null }[] = [];
   if (feedMarkets.length > 0) {
     const feedIds = feedMarkets.map((m) => m.id);
     // Build ARRAY[$1,$2,...] explicitly — passing a JS array directly produces ($1,$2,...) tuple syntax
@@ -41,8 +41,8 @@ export default async function HomePage() {
     type PollRow = { market_id: string; view_count: string | null; like_count: string | null };
     pollData = (result.rows as PollRow[]).map((r) => ({
       marketId: r.market_id,
-      viewCount: r.view_count !== null ? BigInt(r.view_count) : null,
-      likeCount: r.like_count !== null ? BigInt(r.like_count) : null,
+      viewCount: r.view_count !== null ? Number(r.view_count) : null,
+      likeCount: r.like_count !== null ? Number(r.like_count) : null,
     }));
   }
 
