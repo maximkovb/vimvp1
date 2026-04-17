@@ -574,8 +574,15 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
           }}
         />
 
-        {/* Top-left badges — status + projection stacked */}
-        <div className="absolute top-4 left-4 z-10 flex flex-col gap-1.5 items-start">
+        {/* Top-left badges — status + projection stacked; hidden in minimal (fast-swipe) */}
+        <div
+          className="absolute top-4 left-4 z-10 flex flex-col gap-1.5 items-start"
+          style={{
+            opacity: densityState === "minimal" ? 0 : 1,
+            pointerEvents: densityState === "minimal" ? "none" : "auto",
+            transition: "opacity 0.15s ease-out",
+          }}
+        >
           {(status === "halted" || status === "resolving") ? (
             <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/40 uppercase tracking-wide">
               {status === "resolving" ? "Resolving" : "Halted"}
@@ -610,16 +617,43 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
 
         {/* Bottom content */}
         <div className="absolute bottom-0 left-0 right-0 z-10 p-5">
-          <p className="text-sm text-white/60 mb-1">
+          {/* Channel title — hidden in compact + minimal (decorative context) */}
+          <p
+            className="text-sm text-white/60"
+            style={{
+              maxHeight: densityState === "full" ? "2rem" : "0",
+              overflow: "hidden",
+              opacity: densityState === "full" ? 1 : 0,
+              marginBottom: densityState === "full" ? "0.25rem" : "0",
+              transition: "max-height 0.15s ease-out, opacity 0.15s ease-out, margin-bottom 0.15s ease-out",
+            }}
+          >
             @{videoMetadata?.channelTitle ?? "Unknown"}
           </p>
           <p className="text-white text-sm leading-snug mb-4 line-clamp-2">{title}</p>
-          <p className="text-xs text-white/40 mb-3">
+          {/* Target text — hidden in compact + minimal (decorative context) */}
+          <p
+            className="text-xs text-white/40"
+            style={{
+              maxHeight: densityState === "full" ? "2rem" : "0",
+              overflow: "hidden",
+              opacity: densityState === "full" ? 1 : 0,
+              marginBottom: densityState === "full" ? "0.75rem" : "0",
+              transition: "max-height 0.15s ease-out, opacity 0.15s ease-out, margin-bottom 0.15s ease-out",
+            }}
+          >
             Target: {Number(milestoneThreshold).toLocaleString()} {questionType}
           </p>
 
-          {/* YES / NO buttons */}
-          <div className="flex gap-3">
+          {/* YES / NO buttons — hidden only in minimal (fast-swipe); keep in compact */}
+          <div
+            className="flex gap-3"
+            style={{
+              opacity: densityState === "minimal" ? 0 : 1,
+              pointerEvents: densityState === "minimal" ? "none" : "auto",
+              transition: "opacity 0.1s ease-out",
+            }}
+          >
             <button
               onClick={(e) => {
                 e.stopPropagation();
