@@ -148,7 +148,7 @@ export function TradePanel({
             YES {(prices[0] * 100).toFixed(0)}%
           </button>
           {yesTooltip && (
-            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-black/90 text-white text-xs rounded-lg px-3 py-2 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-50 text-center leading-snug whitespace-normal">
+            <div className="absolute bottom-full left-0 mb-2 w-60 bg-black/90 text-white text-xs rounded-lg px-3 py-2 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-50 leading-snug whitespace-normal">
               {yesTooltip}
             </div>
           )}
@@ -165,7 +165,7 @@ export function TradePanel({
             NO {(prices[1] * 100).toFixed(0)}%
           </button>
           {noTooltip && (
-            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-60 bg-black/90 text-white text-xs rounded-lg px-3 py-2 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-50 text-center leading-snug whitespace-normal">
+            <div className="absolute bottom-full right-0 mb-2 w-60 bg-black/90 text-white text-xs rounded-lg px-3 py-2 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-50 text-right leading-snug whitespace-normal">
               {noTooltip}
             </div>
           )}
