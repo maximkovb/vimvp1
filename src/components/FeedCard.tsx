@@ -1,12 +1,13 @@
 "use client";
 
+import type React from "react";
 import Image from "next/image";
 import { useState, useRef, forwardRef, useImperativeHandle, useEffect, memo } from "react";
 import { TIKTOK_THUMBNAIL_RE } from "@/lib/constants";
 import { TradePanel } from "./TradePanel";
 import type { MarketStatus, QuestionType, ProjectionLabel } from "@/db/schema";
 import { deriveResolutionRules } from "@/lib/resolution-rules";
-import type { Density } from "@/hooks/useScrollVelocity";
+import type { Density } from "@/types/feed";
 
 export interface FeedCardHandle {
   activate(): void;
@@ -40,6 +41,24 @@ interface FeedCardProps {
   priority?: boolean;
   onTap: (initialOutcome?: number) => void;
 }
+
+const DENSITY_BADGE_STYLE: Record<Density, React.CSSProperties> = {
+  full:    { opacity: 1, pointerEvents: "auto",  transition: "opacity 0.15s ease-out" },
+  compact: { opacity: 1, pointerEvents: "auto",  transition: "opacity 0.15s ease-out" },
+  minimal: { opacity: 0, pointerEvents: "none",  transition: "opacity 0.15s ease-out" },
+};
+
+const DENSITY_LABEL_STYLE: Record<Density, React.CSSProperties> = {
+  full:    { opacity: 1, visibility: "visible", transition: "opacity 0.15s ease-out, visibility 0.15s ease-out" },
+  compact: { opacity: 0, visibility: "hidden",  transition: "opacity 0.15s ease-out, visibility 0.15s ease-out" },
+  minimal: { opacity: 0, visibility: "hidden",  transition: "opacity 0.15s ease-out, visibility 0.15s ease-out" },
+};
+
+const DENSITY_BUTTON_STYLE: Record<Density, React.CSSProperties> = {
+  full:    { opacity: 1, pointerEvents: "auto",  transition: "opacity 0.1s ease-out" },
+  compact: { opacity: 1, pointerEvents: "auto",  transition: "opacity 0.1s ease-out" },
+  minimal: { opacity: 0, pointerEvents: "none",  transition: "opacity 0.1s ease-out" },
+};
 
 function formatCount(n: number | null) {
   if (n === null) return "—";
@@ -577,11 +596,7 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
         {/* Top-left badges — status + projection stacked; hidden in minimal (fast-swipe) */}
         <div
           className="absolute top-4 left-4 z-10 flex flex-col gap-1.5 items-start"
-          style={{
-            opacity: densityState === "minimal" ? 0 : 1,
-            pointerEvents: densityState === "minimal" ? "none" : "auto",
-            transition: "opacity 0.15s ease-out",
-          }}
+          style={DENSITY_BADGE_STYLE[densityState]}
         >
           {(status === "halted" || status === "resolving") ? (
             <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/40 uppercase tracking-wide">
@@ -622,11 +637,7 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
               per frame that maxHeight transitions would cause. */}
           <p
             className="text-sm text-white/60 mb-1"
-            style={{
-              opacity: densityState === "full" ? 1 : 0,
-              visibility: densityState === "full" ? "visible" : "hidden",
-              transition: "opacity 0.15s ease-out, visibility 0.15s ease-out",
-            }}
+            style={DENSITY_LABEL_STYLE[densityState]}
           >
             @{videoMetadata?.channelTitle ?? "Unknown"}
           </p>
@@ -634,11 +645,7 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
           {/* Target text — hidden in compact + minimal (decorative context) */}
           <p
             className="text-xs text-white/40 mb-3"
-            style={{
-              opacity: densityState === "full" ? 1 : 0,
-              visibility: densityState === "full" ? "visible" : "hidden",
-              transition: "opacity 0.15s ease-out, visibility 0.15s ease-out",
-            }}
+            style={DENSITY_LABEL_STYLE[densityState]}
           >
             Target: {Number(milestoneThreshold).toLocaleString()} {questionType}
           </p>
@@ -646,11 +653,7 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
           {/* YES / NO buttons — hidden only in minimal (fast-swipe); keep in compact */}
           <div
             className="flex gap-3"
-            style={{
-              opacity: densityState === "minimal" ? 0 : 1,
-              pointerEvents: densityState === "minimal" ? "none" : "auto",
-              transition: "opacity 0.1s ease-out",
-            }}
+            style={DENSITY_BUTTON_STYLE[densityState]}
           >
             <button
               onClick={(e) => {

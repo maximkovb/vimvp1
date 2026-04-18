@@ -3,6 +3,16 @@ import { markets } from "@/db/schema";
 import { desc, eq, or, sql } from "drizzle-orm";
 import { DiscoverFeed } from "@/components/DiscoverFeed";
 
+function safePollCount(s: string | null): number | null {
+  if (s === null) return null;
+  const n = Number(s);
+  if (!Number.isSafeInteger(n)) {
+    console.error(`[poll] count out of safe integer range: ${s} — displaying null`);
+    return null;
+  }
+  return n;
+}
+
 export default async function HomePage() {
   // Fetch active/halted/resolving markets — resolved markets live at /resolved
   const activeMarkets = await db
@@ -41,8 +51,8 @@ export default async function HomePage() {
     type PollRow = { market_id: string; view_count: string | null; like_count: string | null };
     pollData = (result.rows as PollRow[]).map((r) => ({
       marketId: r.market_id,
-      viewCount: r.view_count !== null ? Number(r.view_count) : null,
-      likeCount: r.like_count !== null ? Number(r.like_count) : null,
+      viewCount: safePollCount(r.view_count),
+      likeCount: safePollCount(r.like_count),
     }));
   }
 

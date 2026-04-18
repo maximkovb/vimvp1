@@ -1,8 +1,9 @@
 "use client";
 
 import { type RefObject, useEffect, useRef } from "react";
+import type { Density } from "@/types/feed";
 
-export type Density = "minimal" | "compact" | "full";
+export type { Density };
 
 const SCROLL_FAST_PX_S = 150;    // px/s → minimal
 const SCROLL_SLOW_PX_S = 30;     // px/s → compact (below → full)
