@@ -367,6 +367,7 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
     setRefreshing(true);
     // Sync muted state before the video remounts so the DOM attribute matches React state
     setIsMuted(true);
+    setProgress(0);
     try {
       const res = await fetch(`/api/tiktok/${videoId}/play-url`);
       if (res.ok) {
@@ -610,8 +611,8 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
           )}
         </div>
 
-        {/* Milestone progress bar — full bleed, sits just above the video scrubber */}
-        <div className="absolute bottom-[108px] left-0 right-0 z-20">
+        {/* Milestone progress bar — flush with bottom nav */}
+        <div className="absolute bottom-0 left-0 right-0 z-20">
           <ProgressBar
             current={currentCount}
             target={milestoneThreshold}
@@ -619,14 +620,6 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
             priceNo={priceNo}
             userHasPosition={userHasPosition}
             animate={barAnimate}
-          />
-        </div>
-
-        {/* Video playback scrubber */}
-        <div className="absolute bottom-[102px] left-0 right-0 h-[2px] bg-white/20 z-20 pointer-events-none">
-          <div
-            className="h-full bg-white"
-            style={{ width: `${progress * 100}%`, transition: 'none' }}
           />
         </div>
 
@@ -649,6 +642,16 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
           >
             Target: {Number(milestoneThreshold).toLocaleString()} {questionType}
           </p>
+
+          {/* Video scrubber — only visible when paused */}
+          {isPaused && (
+            <div className="w-full h-[2px] bg-white/20 mb-3 pointer-events-none">
+              <div
+                className="h-full bg-white"
+                style={{ width: `${progress * 100}%`, transition: 'none' }}
+              />
+            </div>
+          )}
 
           {/* YES / NO buttons — hidden only in minimal (fast-swipe); keep in compact */}
           <div
