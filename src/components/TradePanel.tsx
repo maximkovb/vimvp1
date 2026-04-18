@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import useSWR from "swr";
 import { buyShares } from "@/lib/actions/trade";
 import { sharesForCost, allPrices } from "@/lib/lmsr";
 import { CoinSlider } from "./CoinSlider";
+import { balanceFetcher, type BalanceData } from "@/lib/balance-fetcher";
 
 const PRICE_STALENESS_THRESHOLD = 0.02;
 
@@ -47,7 +49,15 @@ export function TradePanel({
   const [isPending, startTransition] = useTransition();
   const [staleConfirm, setStaleConfirm] = useState<StaleConfirm | null>(null);
 
-  const sliderMax = userBalance ?? 500;
+  const { data: balanceData, error: balanceError } = useSWR<BalanceData>(
+    "/api/balance",
+    balanceFetcher
+  );
+  // If balance fetch fails, fall back to userBalance prop or 500 (preserves pre-polish behavior).
+  // Note: a failed fetch re-enables the slider at the fallback max — server rejects over-balance trades.
+  const balance = balanceData?.balance ?? (userBalance ?? 500);
+  const isBalanceLoading = !balanceData && !balanceError;
+  const sliderMax = balance;
 
   // Client-side LMSR — synchronous, no API calls
   const ready = bParameter > 0;
@@ -179,7 +189,7 @@ export function TradePanel({
           onChange={handleAmountChange}
           min={1}
           max={sliderMax}
-          disabled={!ready || isPending}
+          disabled={!ready || isPending || isBalanceLoading}
         />
         <div className="flex gap-2 mt-3">
           {[10, 25, 50, 100].map((preset) => (
