@@ -37,11 +37,11 @@ export default async function HistoryPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-muted">
-                  <th className="text-left p-3 font-medium">Date</th>
+                  <th className="text-left p-3 font-medium hidden sm:table-cell">Date</th>
                   <th className="text-left p-3 font-medium">Market</th>
-                  <th className="text-center p-3 font-medium">Side</th>
+                  <th className="text-center p-3 font-medium hidden sm:table-cell">Side</th>
                   <th className="text-center p-3 font-medium">Outcome</th>
-                  <th className="text-right p-3 font-medium">Shares</th>
+                  <th className="text-right p-3 font-medium hidden sm:table-cell">Shares</th>
                   <th className="text-right p-3 font-medium">Cost</th>
                 </tr>
               </thead>
@@ -53,14 +53,14 @@ export default async function HistoryPage() {
                       key={t.trade.id}
                       className="border-b border-border last:border-0 hover:bg-card-hover"
                     >
-                      <td className="p-3 text-muted whitespace-nowrap">
+                      <td className="p-3 text-muted whitespace-nowrap hidden sm:table-cell">
                         {new Date(t.trade.createdAt).toLocaleDateString(undefined, {
                           month: "short",
                           day: "numeric",
                           year: "numeric",
                         })}
                       </td>
-                      <td className="p-3 max-w-[260px]">
+                      <td className="p-3 max-w-[260px] min-w-0">
                         <Link
                           href={`/markets/${t.market.id}`}
                           className="text-accent hover:underline line-clamp-1 block"
@@ -68,7 +68,7 @@ export default async function HistoryPage() {
                           {t.market.title}
                         </Link>
                       </td>
-                      <td className="p-3 text-center">
+                      <td className="p-3 text-center hidden sm:table-cell">
                         <span
                           className={`px-1.5 py-0.5 rounded text-xs font-medium ${
                             isBuy
@@ -90,7 +90,7 @@ export default async function HistoryPage() {
                           {t.trade.outcome === 1 ? "YES" : "NO"}
                         </span>
                       </td>
-                      <td className="p-3 text-right">
+                      <td className="p-3 text-right hidden sm:table-cell">
                         {Math.abs(parseFloat(t.trade.shares)).toFixed(2)}
                       </td>
                       <td className="p-3 text-right font-medium">

@@ -141,10 +141,10 @@ export default async function PortfolioPage() {
                   <tr className="border-b border-border text-muted">
                     <th className="text-left p-3 font-medium">Market</th>
                     <th className="text-center p-3 font-medium">Side</th>
-                    <th className="text-right p-3 font-medium">Shares</th>
-                    <th className="text-right p-3 font-medium">Price</th>
+                    <th className="text-right p-3 font-medium hidden sm:table-cell">Shares</th>
+                    <th className="text-right p-3 font-medium hidden sm:table-cell">Price</th>
                     <th className="text-right p-3 font-medium">Value</th>
-                    <th className="text-right p-3 font-medium">P/L</th>
+                    <th className="text-right p-3 font-medium hidden sm:table-cell">P/L</th>
                     <th className="text-right p-3 font-medium"></th>
                   </tr>
                 </thead>
@@ -173,17 +173,17 @@ export default async function PortfolioPage() {
                           {p.position.outcome === 1 ? "YES" : "NO"}
                         </span>
                       </td>
-                      <td className="p-3 text-right">
+                      <td className="p-3 text-right hidden sm:table-cell">
                         {parseFloat(p.position.shares).toFixed(1)}
                       </td>
-                      <td className="p-3 text-right">
+                      <td className="p-3 text-right hidden sm:table-cell">
                         {(p.currentPrice * 100).toFixed(1)}%
                       </td>
                       <td className="p-3 text-right">
                         {p.markToMarket.toFixed(1)}
                       </td>
                       <td
-                        className={`p-3 text-right font-medium ${
+                        className={`p-3 text-right font-medium hidden sm:table-cell ${
                           p.pnl >= 0 ? "text-green" : "text-red"
                         }`}
                       >
@@ -226,11 +226,11 @@ export default async function PortfolioPage() {
                 <thead>
                   <tr className="border-b border-border text-muted">
                     <th className="text-left p-3 font-medium">Market</th>
-                    <th className="text-center p-3 font-medium">Your Bet</th>
+                    <th className="text-center p-3 font-medium hidden sm:table-cell">Your Bet</th>
                     <th className="text-center p-3 font-medium">Result</th>
-                    <th className="text-right p-3 font-medium">Shares</th>
-                    <th className="text-right p-3 font-medium">Cost</th>
-                    <th className="text-right p-3 font-medium">Payout</th>
+                    <th className="text-right p-3 font-medium hidden sm:table-cell">Shares</th>
+                    <th className="text-right p-3 font-medium hidden sm:table-cell">Cost</th>
+                    <th className="text-right p-3 font-medium hidden sm:table-cell">Payout</th>
                     <th className="text-right p-3 font-medium">Net P&L</th>
                   </tr>
                 </thead>
@@ -254,7 +254,7 @@ export default async function PortfolioPage() {
                             {p.market.title}
                           </Link>
                         </td>
-                        <td className="p-3 text-center">
+                        <td className="p-3 text-center hidden sm:table-cell">
                           {p.position.outcome === 1 ? "YES" : "NO"}
                         </td>
                         <td className="p-3 text-center">
@@ -266,12 +266,12 @@ export default async function PortfolioPage() {
                             {won ? "Won" : "Lost"}
                           </span>
                         </td>
-                        <td className="p-3 text-right">{shares.toFixed(1)}</td>
-                        <td className="p-3 text-right text-muted">
+                        <td className="p-3 text-right hidden sm:table-cell">{shares.toFixed(1)}</td>
+                        <td className="p-3 text-right text-muted hidden sm:table-cell">
                           {cost.toFixed(1)}
                         </td>
                         <td
-                          className={`p-3 text-right font-medium ${
+                          className={`p-3 text-right font-medium hidden sm:table-cell ${
                             won ? "text-green" : "text-muted"
                           }`}
                         >
