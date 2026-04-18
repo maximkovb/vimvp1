@@ -641,8 +641,8 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
           ) : null}
         </div>
 
-        {/* Milestone progress bar — sits above bottom nav */}
-        <div className="absolute bottom-16 left-0 right-0 z-20">
+        {/* Milestone progress bar — sits above bottom nav + safe area */}
+        <div className="absolute left-0 right-0 z-20" style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 5rem)" }}>
           <ProgressBar
             current={currentCount}
             target={milestoneThreshold}
@@ -654,7 +654,7 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
         </div>
 
         {/* Bottom content */}
-        <div className="absolute bottom-16 left-0 right-0 z-10 p-5">
+        <div className="absolute left-0 right-0 z-10 p-5" style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 5rem)" }}>
           {/* Channel title — hidden in compact + minimal (decorative context).
               opacity+visibility is GPU-composited, avoiding layout recalculation
               per frame that maxHeight transitions would cause. */}
