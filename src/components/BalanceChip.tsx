@@ -4,21 +4,10 @@ import { useState, useEffect, useRef, useTransition, useCallback } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { claimDailyReward } from "@/lib/actions/economy";
 import { getRecentActivity, type RecentActivityResult } from "@/lib/actions/economy";
-
-interface BalanceData {
-  balance: number;
-  loginStreak: number;
-  lastLoginReward: string | null;
-}
+import { balanceFetcher, type BalanceData } from "@/lib/balance-fetcher";
 
 interface BalanceChipProps {
   initialBalance?: number;
-}
-
-async function balanceFetcher(url: string): Promise<BalanceData> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error("Failed to fetch balance");
-  return res.json();
 }
 
 function CoinIcon() {
@@ -209,7 +198,7 @@ export function BalanceChip({ initialBalance = 0 }: BalanceChipProps) {
         onClick={() => setOpen((v) => !v)}
         className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm font-medium transition-all border ${
           animating
-            ? "border-accent text-accent bg-accent/10 shadow-[0_0_0_2px_var(--accent,#6366f1)22]"
+            ? "border-accent text-accent bg-accent/10 shadow-[0_0_0_2px_var(--accent,#4169e1)22]"
             : "border-border text-foreground bg-card hover:bg-card-hover"
         }`}
         aria-label="Coin balance"

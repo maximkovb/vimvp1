@@ -4,6 +4,8 @@ import { users } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 
+export const dynamic = "force-dynamic";
+
 // GET /api/balance — returns authenticated user's balance, loginStreak, lastLoginReward
 export async function GET() {
   const session = await auth();
@@ -25,9 +27,12 @@ export async function GET() {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  return NextResponse.json({
-    balance: parseFloat(user.balance),
-    loginStreak: user.loginStreak,
-    lastLoginReward: user.lastLoginReward?.toISOString() ?? null,
-  });
+  return NextResponse.json(
+    {
+      balance: parseFloat(user.balance),
+      loginStreak: user.loginStreak,
+      lastLoginReward: user.lastLoginReward?.toISOString() ?? null,
+    },
+    { headers: { "Cache-Control": "no-store" } }
+  );
 }
