@@ -151,14 +151,24 @@ export function DiscoverFeed({
     return () => observer.disconnect();
   }, [feedMarkets.length]);
 
-  // Dispatch density to the active card only. Freeze while BetSheet is open (density
-  // changes are invisible behind the sheet and would cause a flash on close).
+  // Dispatch density changes to the active card. BetSheet open state is a guard,
+  // not a trigger — keeping it out of the dep array prevents a stale-density flash
+  // when the sheet closes (sheet.open transition would re-fire with whatever density
+  // was last computed while scrolling behind the open sheet).
   useEffect(() => {
     if (sheet.open) return;
     const idx = activeIdxRef.current;
     if (idx === -1) return;
     cardRefs.current[idx]?.current?.setDensity(density);
-  }, [density, sheet.open]);
+  }, [density]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reset density to full when the sheet closes, mirroring activate()'s reset.
+  useEffect(() => {
+    if (sheet.open) return;
+    const idx = activeIdxRef.current;
+    if (idx === -1) return;
+    cardRefs.current[idx]?.current?.setDensity("full");
+  }, [sheet.open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // O(1) position lookup — which feed markets the logged-in user holds shares in.
   const positionSet = useMemo(() => new Set(userPositionIds ?? []), [userPositionIds]);
