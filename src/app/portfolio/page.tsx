@@ -154,7 +154,7 @@ export default async function PortfolioPage() {
                       key={p.position.id}
                       className="border-b border-border last:border-0 hover:bg-card-hover"
                     >
-                      <td className="p-3 max-w-[200px] min-w-0">
+                      <td className="p-3 max-w-0 overflow-hidden w-full">
                         <Link
                           href={`/markets/${p.market.id}`}
                           className="text-accent hover:underline line-clamp-1 block"
@@ -246,7 +246,7 @@ export default async function PortfolioPage() {
                         key={p.position.id}
                         className="border-b border-border last:border-0"
                       >
-                        <td className="p-3 max-w-[200px] min-w-0">
+                        <td className="p-3 max-w-0 overflow-hidden w-full">
                           <Link
                             href={`/markets/${p.market.id}`}
                             className="text-accent hover:underline line-clamp-1 block"
@@ -310,9 +310,9 @@ export default async function PortfolioPage() {
                 key={t.trade.id}
                 className="flex items-center justify-between text-sm py-1.5 border-b border-border last:border-0"
               >
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
                   <span
-                    className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                    className={`px-1.5 py-0.5 rounded text-xs font-medium shrink-0 ${
                       parseFloat(t.trade.shares) > 0
                         ? "bg-green/10 text-green"
                         : "bg-red/10 text-red"
@@ -320,12 +320,12 @@ export default async function PortfolioPage() {
                   >
                     {parseFloat(t.trade.shares) > 0 ? "BUY" : "SELL"}
                   </span>
-                  <span className="font-medium">
+                  <span className="font-medium shrink-0">
                     {t.trade.outcome === 1 ? "YES" : "NO"}
                   </span>
                   <Link
                     href={`/markets/${t.market.id}`}
-                    className="text-muted hover:text-accent truncate max-w-[200px]"
+                    className="text-muted hover:text-accent truncate min-w-0"
                   >
                     {t.market.title}
                   </Link>
