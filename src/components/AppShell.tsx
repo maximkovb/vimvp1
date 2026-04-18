@@ -2,6 +2,7 @@ import { auth } from "@/lib/auth";
 import { isAdmin } from "@/lib/admin";
 import { SidebarClient } from "./SidebarClient";
 import { BottomNavClient } from "./BottomNavClient";
+import { ViewportReset } from "./ViewportReset";
 
 export async function AppShell({ children }: { children: React.ReactNode }) {
   const session = await auth();
@@ -18,6 +19,8 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex-1 md:ml-56 flex flex-col min-h-screen">
         <main className="flex-1 pb-16 md:pb-0">{children}</main>
       </div>
+
+      <ViewportReset />
 
       {/* Mobile bottom nav */}
       <nav
