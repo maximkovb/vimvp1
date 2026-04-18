@@ -241,6 +241,14 @@ function PlayIcon() {
   );
 }
 
+function ChevronUpIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z" />
+    </svg>
+  );
+}
+
 export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function FeedCard({
   id,
   title,
@@ -264,8 +272,20 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
   const [currentPlayUrl, setCurrentPlayUrl] = useState(videoMetadata?.playUrl ?? null);
   const [isMuted, setIsMuted] = useState(true);
   const [isPaused, setIsPaused] = useState(true);
+  const [isBetExpanded, setIsBetExpanded] = useState(false);
   const [progress, setProgress] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+  const [isEnded, setIsEnded] = useState(() =>
+    resolvesAt != null && new Date(resolvesAt) <= new Date()
+  );
+
+  useEffect(() => {
+    if (!resolvesAt || isEnded) return;
+    const ms = new Date(resolvesAt).getTime() - Date.now();
+    if (ms <= 0) { setIsEnded(true); return; }
+    const t = setTimeout(() => setIsEnded(true), ms);
+    return () => clearTimeout(t);
+  }, [resolvesAt, isEnded]);
   // Progress bar animation — fires once on first activate(), then stays true for the
   // lifetime of the component (no re-animation on scroll-back, resets on page refresh).
   const [barAnimate, setBarAnimate] = useState(false);
@@ -278,6 +298,7 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
   useImperativeHandle(ref, () => ({
     setDensity(density: Density) {
       setDensityState(density);
+      if (density === "minimal") setIsBetExpanded(false);
     },
     activate() {
       // Reset density to full on re-activation — prevents stale minimal/compact state
@@ -325,6 +346,7 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
         }
         setIsMuted(true);
         setIsPaused(true);
+        setIsBetExpanded(false);
       };
       // Await any pending play() promise before pausing to prevent the
       // play/pause race where play() resolves after pause() and re-starts the video
@@ -480,11 +502,15 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
                 {status === "resolving" ? "Resolving" : "Halted"}
               </span>
             ) : null}
-            {projectionLabel && (
+            {(status === "resolved" || status === "failed" || status === "cancelled" || isEnded) ? (
+              <span className="self-start px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wide bg-muted/20 text-muted border border-muted/20">
+                Ended
+              </span>
+            ) : projectionLabel ? (
               <span className={`self-start px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${PROJECTION_BADGE[projectionLabel].className}`}>
                 {PROJECTION_BADGE[projectionLabel].label}
               </span>
-            )}
+            ) : null}
           </div>
 
           {/* Creator + title */}
@@ -525,7 +551,7 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
       </div>
 
       {/* ── MOBILE LAYOUT (<1024px) ──────────────────────────────────────── */}
-      <div className="lg:hidden relative w-full h-full cursor-pointer" onClick={() => isTrading && onTap()}>
+      <div className="lg:hidden relative w-full h-full cursor-pointer" onClick={() => { if (isBetExpanded) { setIsBetExpanded(false); return; } if (isTrading) onTap(); }}>
         {/* Full-bleed video */}
         {currentPlayUrl ? (
           <>
@@ -604,11 +630,15 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
               {status === "resolving" ? "Resolving" : "Halted"}
             </span>
           ) : null}
-          {projectionLabel && (
+          {(status === "resolved" || status === "failed" || status === "cancelled" || isEnded) ? (
+            <span className="px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wide bg-muted/20 text-muted border border-muted/20">
+              Ended
+            </span>
+          ) : projectionLabel ? (
             <span className={`px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${PROJECTION_BADGE[projectionLabel].className}`}>
               {PROJECTION_BADGE[projectionLabel].label}
             </span>
-          )}
+          ) : null}
         </div>
 
         {/* Milestone progress bar — flush with bottom nav */}
@@ -653,39 +683,41 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
             </div>
           )}
 
-          {/* YES / NO buttons — hidden only in minimal (fast-swipe); keep in compact */}
-          <div
-            className="flex gap-3"
-            style={DENSITY_BUTTON_STYLE[densityState]}
-          >
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                if (isTrading) onTap(0);
-              }}
-              disabled={!isTrading}
-              className={`flex-1 py-3.5 rounded-full text-sm font-bold uppercase tracking-wide transition-opacity ${
-                isTrading
-                  ? "bg-green text-white hover:opacity-90 active:opacity-75"
-                  : "bg-green/20 text-green/40 cursor-not-allowed"
-              }`}
-            >
-              YES&nbsp;{(priceYes * 100).toFixed(0)}%
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                if (isTrading) onTap(1);
-              }}
-              disabled={!isTrading}
-              className={`flex-1 py-3.5 rounded-full text-sm font-bold uppercase tracking-wide transition-opacity ${
-                isTrading
-                  ? "bg-red text-white hover:opacity-90 active:opacity-75"
-                  : "bg-red/20 text-red/40 cursor-not-allowed"
-              }`}
-            >
-              NO&nbsp;{(priceNo * 100).toFixed(0)}%
-            </button>
+          {/* Bet tray — collapsed: "Make Prediction" pill; expanded: YES/NO buttons */}
+          <div style={DENSITY_BUTTON_STYLE[densityState]}>
+            {isTrading && !isBetExpanded && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setIsBetExpanded(true); }}
+                className="w-full py-3.5 rounded-full text-sm font-bold uppercase tracking-wide bg-white/10 text-white hover:bg-white/15 active:bg-white/20 flex items-center justify-center gap-2"
+              >
+                <ChevronUpIcon />
+                Make Prediction
+              </button>
+            )}
+            {isBetExpanded && isTrading && (
+              <div className="flex gap-3">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsBetExpanded(false);
+                    onTap(0);
+                  }}
+                  className="flex-1 py-3.5 rounded-full text-sm font-bold uppercase tracking-wide bg-green text-white hover:opacity-90 active:opacity-75"
+                >
+                  YES&nbsp;{(priceYes * 100).toFixed(0)}%
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsBetExpanded(false);
+                    onTap(1);
+                  }}
+                  className="flex-1 py-3.5 rounded-full text-sm font-bold uppercase tracking-wide bg-red text-white hover:opacity-90 active:opacity-75"
+                >
+                  NO&nbsp;{(priceNo * 100).toFixed(0)}%
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
