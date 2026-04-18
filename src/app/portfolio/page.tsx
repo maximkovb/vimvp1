@@ -154,10 +154,10 @@ export default async function PortfolioPage() {
                       key={p.position.id}
                       className="border-b border-border last:border-0 hover:bg-card-hover"
                     >
-                      <td className="p-3">
+                      <td className="p-3 max-w-[200px] min-w-0">
                         <Link
                           href={`/markets/${p.market.id}`}
-                          className="text-accent hover:underline"
+                          className="text-accent hover:underline line-clamp-1 block"
                         >
                           {p.market.title}
                         </Link>
@@ -246,10 +246,10 @@ export default async function PortfolioPage() {
                         key={p.position.id}
                         className="border-b border-border last:border-0"
                       >
-                        <td className="p-3">
+                        <td className="p-3 max-w-[200px] min-w-0">
                           <Link
                             href={`/markets/${p.market.id}`}
-                            className="text-accent hover:underline"
+                            className="text-accent hover:underline line-clamp-1 block"
                           >
                             {p.market.title}
                           </Link>
