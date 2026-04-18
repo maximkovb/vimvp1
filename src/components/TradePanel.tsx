@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useRef, useEffect } from "react";
 import useSWR from "swr";
 import { buyShares } from "@/lib/actions/trade";
 import { sharesForCost, allPrices } from "@/lib/lmsr";
@@ -25,7 +25,7 @@ export interface TradePanelProps {
   prices: number[];       // [priceYes, priceNo]
   quantities: number[];   // [quantityYes, quantityNo]
   bParameter: number;
-  userBalance?: number;   // slider max cap; falls back to 500
+  userBalance?: number;   // override for balance; falls back to SWR or 500
   initialOutcome?: number;
   yesTooltip?: string;
   noTooltip?: string;
@@ -45,19 +45,48 @@ export function TradePanel({
 }: TradePanelProps) {
   const [outcome, setOutcome] = useState<number>(initialOutcome ?? 0);
   const [amount, setAmount] = useState(10);
+  const [localInput, setLocalInput] = useState("10");
+  const [isEditing, setIsEditing] = useState(false);
   const [error, setError] = useState("");
+  const [balanceError, setBalanceError] = useState("");
   const [isPending, startTransition] = useTransition();
   const [staleConfirm, setStaleConfirm] = useState<StaleConfirm | null>(null);
+  const balanceErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { data: balanceData, error: balanceError } = useSWR<BalanceData>(
+  const { data: balanceData, error: balanceFetchError } = useSWR<BalanceData>(
     "/api/balance",
     balanceFetcher
   );
   // If balance fetch fails, fall back to userBalance prop or 500 (preserves pre-polish behavior).
   // Note: a failed fetch re-enables the slider at the fallback max — server rejects over-balance trades.
   const balance = balanceData?.balance ?? (userBalance ?? 500);
-  const isBalanceLoading = !balanceData && !balanceError;
+  const isBalanceLoading = !balanceData && !balanceFetchError;
   const sliderMax = balance;
+
+  // Clean up balance error timer on unmount
+  useEffect(() => {
+    return () => {
+      if (balanceErrorTimerRef.current) clearTimeout(balanceErrorTimerRef.current);
+    };
+  }, []);
+
+  function flashBalanceError() {
+    setBalanceError("Not enough coins");
+    if (balanceErrorTimerRef.current) clearTimeout(balanceErrorTimerRef.current);
+    balanceErrorTimerRef.current = setTimeout(() => setBalanceError(""), 1500);
+  }
+
+  function commitInput(raw: string) {
+    const parsed = parseInt(raw, 10);
+    const valid = isNaN(parsed) ? 1 : parsed;
+    const clamped = Math.min(Math.max(valid, 1), sliderMax);
+    if (clamped < valid) flashBalanceError();
+    setAmount(clamped);
+    setLocalInput(String(clamped));
+    setIsEditing(false);
+    setError("");
+    setStaleConfirm(null);
+  }
 
   // Client-side LMSR — synchronous, no API calls
   const ready = bParameter > 0;
@@ -81,6 +110,8 @@ export function TradePanel({
 
   function handleAmountChange(value: number) {
     setAmount(value);
+    setLocalInput(String(value));
+    setIsEditing(false);
     setError("");
     setStaleConfirm(null);
   }
@@ -123,6 +154,8 @@ export function TradePanel({
       newQ[outcome] += result.shares;
       const priceAfter = allPrices(newQ, bParameter)[outcome];
       setAmount(10);
+      setLocalInput("10");
+      setIsEditing(false);
       setError("");
       setStaleConfirm(null);
       onTradeSuccess?.({ outcome, cost: result.cost, shares: result.shares, priceAfter });
@@ -139,6 +172,8 @@ export function TradePanel({
     const canProceed = await checkStaleness();
     if (canProceed) executeBuy();
   }
+
+  const inputDisabled = !ready || isPending || isBalanceLoading;
 
   return (
     <div className="bg-card border border-border rounded-xl p-4">
@@ -182,26 +217,41 @@ export function TradePanel({
         </div>
       </div>
 
-      {/* Coin amount slider */}
+      {/* Amount input + slider */}
       <div className="mb-4">
+        {/* Coin amount text input */}
+        <div className="flex items-center gap-2 mb-3">
+          <input
+            type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            value={isEditing ? localInput : String(amount)}
+            disabled={inputDisabled}
+            onChange={(e) => {
+              setLocalInput(e.target.value);
+              setIsEditing(true);
+            }}
+            onBlur={(e) => commitInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.currentTarget.blur();
+              }
+            }}
+            className="w-24 px-3 py-1.5 bg-background border border-border rounded-lg text-sm font-medium tabular-nums text-center focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50 disabled:cursor-not-allowed"
+          />
+          <span className="text-sm text-muted">coins</span>
+          {balanceError && (
+            <span className="text-xs text-red ml-auto">{balanceError}</span>
+          )}
+        </div>
+
         <CoinSlider
           value={amount}
           onChange={handleAmountChange}
           min={1}
           max={sliderMax}
-          disabled={!ready || isPending || isBalanceLoading}
+          disabled={inputDisabled}
         />
-        <div className="flex gap-2 mt-3">
-          {[10, 25, 50, 100].map((preset) => (
-            <button
-              key={preset}
-              onClick={() => handleAmountChange(Math.min(preset, sliderMax))}
-              className="flex-1 py-1 text-xs bg-background border border-border rounded hover:bg-card-hover transition-colors"
-            >
-              {preset}
-            </button>
-          ))}
-        </div>
       </div>
 
       {/* Real-time payout panel */}
@@ -256,7 +306,7 @@ export function TradePanel({
         </div>
       )}
 
-      {/* Error */}
+      {/* Trade error */}
       {error && (
         <div className="text-sm text-red mb-3 p-2 bg-red/10 rounded-lg">
           {error}
