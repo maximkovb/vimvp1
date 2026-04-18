@@ -28,6 +28,12 @@
   --color-muted: var(--muted);
 }
 
+/* Prevent page-level horizontal overflow from triggering iOS viewport zoom.
+   Applied to html (not body) to avoid breaking position:fixed on iOS Safari. */
+html {
+  overflow-x: hidden;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);

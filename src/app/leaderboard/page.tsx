@@ -90,59 +90,61 @@ export default async function LeaderboardPage() {
       <h1 className="text-2xl font-bold mb-6">Leaderboard</h1>
 
       <div className="bg-card border border-border rounded-xl overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-border text-muted">
-              <th className="text-left p-3 font-medium w-12">#</th>
-              <th className="text-left p-3 font-medium">Trader</th>
-              <th className="text-right p-3 font-medium">Balance</th>
-              <th className="text-right p-3 font-medium">Positions</th>
-              <th className="text-right p-3 font-medium">Total Value</th>
-              <th className="text-right p-3 font-medium">Win Rate</th>
-              <th className="text-right p-3 font-medium">Streak</th>
-            </tr>
-          </thead>
-          <tbody>
-            {ranked.map((user, i) => (
-              <tr
-                key={user.id}
-                className="border-b border-border last:border-0 hover:bg-card-hover"
-              >
-                <td className="p-3 font-bold text-muted">
-                  {i === 0 ? "1st" : i === 1 ? "2nd" : i === 2 ? "3rd" : `${i + 1}th`}
-                </td>
-                <td className="p-3 font-medium">
-                  {user.name || "Anonymous"}
-                </td>
-                <td className="p-3 text-right">
-                  {parseFloat(user.balance).toLocaleString(undefined, {
-                    maximumFractionDigits: 0,
-                  })}
-                </td>
-                <td className="p-3 text-right text-muted">
-                  {user.positionsValue > 0
-                    ? user.positionsValue.toLocaleString(undefined, {
-                        maximumFractionDigits: 0,
-                      })
-                    : "—"}
-                </td>
-                <td className="p-3 text-right font-bold">
-                  {user.totalValue.toLocaleString(undefined, {
-                    maximumFractionDigits: 0,
-                  })}
-                </td>
-                <td className="p-3 text-right text-muted">
-                  {user.winRate !== null
-                    ? `${Math.round(user.winRate * 100)}%`
-                    : "—"}
-                </td>
-                <td className="p-3 text-right">
-                  {user.loginStreak > 0 ? `${user.loginStreak}d` : "—"}
-                </td>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-muted">
+                <th className="text-left p-3 font-medium w-12">#</th>
+                <th className="text-left p-3 font-medium">Trader</th>
+                <th className="text-right p-3 font-medium hidden sm:table-cell">Balance</th>
+                <th className="text-right p-3 font-medium hidden sm:table-cell">Positions</th>
+                <th className="text-right p-3 font-medium">Total Value</th>
+                <th className="text-right p-3 font-medium hidden sm:table-cell">Win Rate</th>
+                <th className="text-right p-3 font-medium hidden sm:table-cell">Streak</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {ranked.map((user, i) => (
+                <tr
+                  key={user.id}
+                  className="border-b border-border last:border-0 hover:bg-card-hover"
+                >
+                  <td className="p-3 font-bold text-muted">
+                    {i === 0 ? "1st" : i === 1 ? "2nd" : i === 2 ? "3rd" : `${i + 1}th`}
+                  </td>
+                  <td className="p-3 font-medium">
+                    {user.name || "Anonymous"}
+                  </td>
+                  <td className="p-3 text-right hidden sm:table-cell">
+                    {parseFloat(user.balance).toLocaleString(undefined, {
+                      maximumFractionDigits: 0,
+                    })}
+                  </td>
+                  <td className="p-3 text-right text-muted hidden sm:table-cell">
+                    {user.positionsValue > 0
+                      ? user.positionsValue.toLocaleString(undefined, {
+                          maximumFractionDigits: 0,
+                        })
+                      : "—"}
+                  </td>
+                  <td className="p-3 text-right font-bold">
+                    {user.totalValue.toLocaleString(undefined, {
+                      maximumFractionDigits: 0,
+                    })}
+                  </td>
+                  <td className="p-3 text-right text-muted hidden sm:table-cell">
+                    {user.winRate !== null
+                      ? `${Math.round(user.winRate * 100)}%`
+                      : "—"}
+                  </td>
+                  <td className="p-3 text-right hidden sm:table-cell">
+                    {user.loginStreak > 0 ? `${user.loginStreak}d` : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
