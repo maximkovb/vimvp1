@@ -90,9 +90,9 @@ export function DiscoverFeed({
   const feedColumnRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const activeIdxRef = useRef<number>(-1);
-
-  // Scroll velocity → density signal for the active card's metric display
-  const density = useScrollVelocity(feedColumnRef);
+  // Tracked as a ref so the scroll velocity callback can read it without being
+  // re-registered each time sheet.open changes.
+  const sheetOpenRef = useRef(false);
 
   // Ref array resizes to match feedMarkets exactly — prevents stale refs when markets are added/removed.
   const cardRefs = useRef<RefObject<FeedCardHandle | null>[]>([]);
@@ -151,16 +151,19 @@ export function DiscoverFeed({
     return () => observer.disconnect();
   }, [feedMarkets.length]);
 
-  // Dispatch density changes to the active card. BetSheet open state is a guard,
-  // not a trigger — keeping it out of the dep array prevents a stale-density flash
-  // when the sheet closes (sheet.open transition would re-fire with whatever density
-  // was last computed while scrolling behind the open sheet).
-  useEffect(() => {
-    if (sheet.open) return;
+  // Keep sheetOpenRef in sync so the velocity callback can guard without
+  // needing sheet.open in its closure (which would force re-registration).
+  useEffect(() => { sheetOpenRef.current = sheet.open; }, [sheet.open]);
+
+  // Scroll velocity → density dispatch. Callback pattern (not state) means
+  // DiscoverFeed never re-renders for density changes — only the targeted FeedCard
+  // re-renders via its own setDensityState.
+  useScrollVelocity(feedColumnRef, useCallback((d) => {
+    if (sheetOpenRef.current) return;
     const idx = activeIdxRef.current;
     if (idx === -1) return;
-    cardRefs.current[idx]?.current?.setDensity(density);
-  }, [density]); // eslint-disable-line react-hooks/exhaustive-deps
+    cardRefs.current[idx]?.current?.setDensity(d);
+  }, [])); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset density to full when the sheet closes, mirroring activate()'s reset.
   useEffect(() => {

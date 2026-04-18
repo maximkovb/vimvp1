@@ -617,15 +617,15 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
 
         {/* Bottom content */}
         <div className="absolute bottom-0 left-0 right-0 z-10 p-5">
-          {/* Channel title — hidden in compact + minimal (decorative context) */}
+          {/* Channel title — hidden in compact + minimal (decorative context).
+              opacity+visibility is GPU-composited, avoiding layout recalculation
+              per frame that maxHeight transitions would cause. */}
           <p
-            className="text-sm text-white/60"
+            className="text-sm text-white/60 mb-1"
             style={{
-              maxHeight: densityState === "full" ? "2rem" : "0",
-              overflow: "hidden",
               opacity: densityState === "full" ? 1 : 0,
-              marginBottom: densityState === "full" ? "0.25rem" : "0",
-              transition: "max-height 0.15s ease-out, opacity 0.15s ease-out, margin-bottom 0.15s ease-out",
+              visibility: densityState === "full" ? "visible" : "hidden",
+              transition: "opacity 0.15s ease-out, visibility 0.15s ease-out",
             }}
           >
             @{videoMetadata?.channelTitle ?? "Unknown"}
@@ -633,13 +633,11 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
           <p className="text-white text-sm leading-snug mb-4 line-clamp-2">{title}</p>
           {/* Target text — hidden in compact + minimal (decorative context) */}
           <p
-            className="text-xs text-white/40"
+            className="text-xs text-white/40 mb-3"
             style={{
-              maxHeight: densityState === "full" ? "2rem" : "0",
-              overflow: "hidden",
               opacity: densityState === "full" ? 1 : 0,
-              marginBottom: densityState === "full" ? "0.75rem" : "0",
-              transition: "max-height 0.15s ease-out, opacity 0.15s ease-out, margin-bottom 0.15s ease-out",
+              visibility: densityState === "full" ? "visible" : "hidden",
+              transition: "opacity 0.15s ease-out, visibility 0.15s ease-out",
             }}
           >
             Target: {Number(milestoneThreshold).toLocaleString()} {questionType}
