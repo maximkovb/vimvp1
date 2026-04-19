@@ -5,6 +5,7 @@ import Image from "next/image";
 import { useState, useRef, forwardRef, useImperativeHandle, useEffect, memo } from "react";
 import { TIKTOK_THUMBNAIL_RE } from "@/lib/constants";
 import { TradePanel } from "./TradePanel";
+import { formatTimeRemaining } from "./CountdownTimer";
 import type { MarketStatus, QuestionType, ProjectionLabel } from "@/db/schema";
 import { deriveResolutionRules } from "@/lib/resolution-rules";
 import type { Density } from "@/types/feed";
@@ -70,7 +71,7 @@ function formatCount(n: number | null) {
 const PROJECTION_BADGE: Record<ProjectionLabel, { label: string; className: string }> = {
   ON_TRACK:     { label: "On Track",     className: "bg-green-500/20 text-green-400 border border-green-500/40" },
   AT_RISK:      { label: "At Risk",      className: "bg-amber-500/20 text-amber-400 border border-amber-500/40" },
-  BREAKING_OUT: { label: "Breaking Out", className: "bg-purple-500/20 text-purple-400 border border-purple-500/40" },
+  BREAKING_OUT: { label: "Breaking Out", className: "bg-blue-500/20 text-blue-400 border border-blue-500/40" },
 };
 
 function formatTarget(n: number) {
@@ -277,6 +278,26 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
     const t = setTimeout(() => setIsEnded(true), ms);
     return () => clearTimeout(t);
   }, [resolvesAt, isEnded]);
+
+  const isEndedRef = useRef(isEnded);
+  const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
+
+  useEffect(() => {
+    isEndedRef.current = isEnded;
+    if (!resolvesAt || isEnded) {
+      setTimeRemaining(null);
+      return;
+    }
+    const rem = new Date(resolvesAt).getTime() - Date.now();
+    setTimeRemaining(rem);
+    const id = setInterval(() => {
+      const remaining = new Date(resolvesAt).getTime() - Date.now();
+      setTimeRemaining(remaining);
+      if (remaining <= 0 || isEndedRef.current) clearInterval(id);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [resolvesAt, isEnded]);
+
   // Progress bar animation — fires once on first activate(), then stays true for the
   // lifetime of the component (no re-animation on scroll-back, resets on page refresh).
   const [barAnimate, setBarAnimate] = useState(false);
@@ -420,6 +441,14 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
     }
   }
 
+  const showEnded = isEnded || status === "resolved" || status === "failed" || status === "cancelled";
+  const isUrgent = timeRemaining !== null && timeRemaining > 0 && timeRemaining < 1000 * 60 * 60;
+  const timeLabel = showEnded
+    ? "Ended"
+    : timeRemaining !== null && timeRemaining > 0
+      ? `${formatTimeRemaining(timeRemaining)} remaining`
+      : null;
+
   return (
     <div className="relative w-full h-full overflow-hidden bg-background">
       {/* ── DESKTOP LAYOUT (≥1024px) ─────────────────────────────────────── */}
@@ -520,6 +549,11 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
             animate={barAnimate}
             showLabels
           />
+          {resolvesAt && timeLabel !== null && (
+            <p className={`text-[10px] tabular-nums mt-[-14px] ${isUrgent || showEnded ? "text-red font-medium" : "text-muted"}`}>
+              {timeLabel}
+            </p>
+          )}
 
           {/* Trade panel or halted badge */}
           {isTrading ? (
@@ -605,7 +639,7 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
           className="absolute inset-0 pointer-events-none"
           style={{
             background:
-              "linear-gradient(to top, rgba(10,10,19,0.95) 0%, rgba(10,10,19,0.3) 40%, transparent 60%), linear-gradient(to bottom, rgba(10,10,19,0.6) 0%, transparent 25%)",
+              "linear-gradient(to top, rgba(18,18,18,0.94) 0%, rgba(18,18,18,0.3) 40%, transparent 60%), linear-gradient(to bottom, rgba(18,18,18,0.6) 0%, transparent 25%)",
           }}
         />
 
@@ -629,6 +663,13 @@ export const FeedCard = memo(forwardRef<FeedCardHandle, FeedCardProps>(function 
             </span>
           ) : null}
         </div>
+
+        {/* Time remaining — top-right corner, always visible regardless of density */}
+        {resolvesAt && (showEnded || timeRemaining !== null) && timeLabel !== null && (
+          <span className={`absolute top-4 right-4 z-10 text-[10px] tabular-nums bg-black/40 rounded px-1.5 py-0.5 ${isUrgent || showEnded ? "text-red font-medium" : "text-white/50"}`}>
+            {timeLabel}
+          </span>
+        )}
 
         {/* Milestone progress bar — sits above bottom nav + safe area */}
         <div className="absolute left-0 right-0 z-20" style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 5rem)" }}>
