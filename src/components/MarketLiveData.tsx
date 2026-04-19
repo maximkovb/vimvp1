@@ -1,6 +1,5 @@
 "use client";
 
-import useSWR from "swr";
 import { useEffect, useRef } from "react";
 import type { UTCTimestamp } from "lightweight-charts";
 import type { MarketData } from "@/types/market";
@@ -8,7 +7,7 @@ import { PriceChart } from "@/components/PriceChart";
 import { VideoStatsChart } from "@/components/VideoStatsChart";
 import { Toast } from "@/components/Toast";
 import { useToast } from "@/hooks/useToast";
-import { marketFetcher } from "@/lib/market-fetcher";
+import { useMarketData } from "@/hooks/useMarketData";
 
 interface MarketLiveDataProps {
   marketId: string;
@@ -21,17 +20,7 @@ export function MarketLiveData({
   initialData,
   children,
 }: MarketLiveDataProps) {
-  const { data, isValidating } = useSWR<MarketData>(
-    `/api/markets/${marketId}`,
-    marketFetcher,
-    {
-      refreshInterval: (latestData) => {
-        const status = latestData?.status ?? initialData.status;
-        return status === "halted" || status === "resolving" ? 10_000 : 60_000;
-      },
-      fallbackData: initialData,
-    }
-  );
+  const { data, isValidating } = useMarketData(marketId, initialData);
 
   // Track when data was last successfully fetched (used for Toast timing only)
   const prevValidating = useRef(false);

@@ -1,9 +1,8 @@
 "use client";
 
-import useSWR from "swr";
 import type { MarketData } from "@/types/market";
 import { formatCount } from "@/lib/format";
-import { marketFetcher } from "@/lib/market-fetcher";
+import { useMarketData } from "@/hooks/useMarketData";
 
 interface LiveEngagementStatsProps {
   marketId: string;
@@ -11,17 +10,7 @@ interface LiveEngagementStatsProps {
 }
 
 export function LiveEngagementStats({ marketId, initialData }: LiveEngagementStatsProps) {
-  const { data } = useSWR<MarketData>(
-    `/api/markets/${marketId}`,
-    marketFetcher,
-    {
-      refreshInterval: (latestData) => {
-        const status = latestData?.status ?? initialData.status;
-        return status === "halted" || status === "resolving" ? 10_000 : 60_000;
-      },
-      fallbackData: initialData,
-    }
-  );
+  const { data } = useMarketData(marketId, initialData);
 
   const market = data ?? initialData;
   // Find the last poll row that actually has data — guards against stale null rows.
