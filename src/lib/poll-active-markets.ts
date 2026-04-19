@@ -1,10 +1,10 @@
 import { db } from "@/db";
 import { markets, tiktokPolls } from "@/db/schema";
-import { and, or, eq, sql, lte, desc } from "drizzle-orm";
+import { and, or, eq, sql, lte, asc, desc } from "drizzle-orm";
 import { fetchTikTokStatsById } from "@/lib/tiktok";
 import { TIKTOK_THUMBNAIL_RE, TIKTOK_PLAY_URL_RE } from "@/lib/constants";
 import { resolveMarket } from "@/lib/oracle";
-import { computeProjectionLabel } from "@/lib/projection";
+import { computeProjectionLabel, MIN_WINDOW_HOURS } from "@/lib/projection";
 
 export interface PollResult {
   polled: number;
@@ -184,27 +184,73 @@ export async function pollAllActiveMarkets(force = false): Promise<PollResult> {
           const currentMetric =
             market.questionType === "views" ? stats.viewCount : stats.likeCount;
           const threshold = Number(market.milestoneThreshold);
+          const now = Date.now();
 
-          const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-          const [oldPoll] = await db
-            .select({ viewCount: tiktokPolls.viewCount, likeCount: tiktokPolls.likeCount })
-            .from(tiktokPolls)
-            .where(
-              and(
-                eq(tiktokPolls.marketId, market.id),
-                lte(tiktokPolls.polledAt, twentyFourHoursAgo)
-              )
-            )
-            .orderBy(desc(tiktokPolls.polledAt))
-            .limit(1);
+          const poll1hWindow = { from: new Date(now - 3 * 60 * 60 * 1000), to: new Date(now - 1 * 60 * 60 * 1000) };
+          const poll2hWindow = { from: new Date(now - 4 * 60 * 60 * 1000), to: new Date(now - 2 * 60 * 60 * 1000) };
 
-          const oldMetric = oldPoll
-            ? Number(market.questionType === "views" ? oldPoll.viewCount : oldPoll.likeCount)
-            : null;
+          const pollCols = { id: tiktokPolls.id, viewCount: tiktokPolls.viewCount, likeCount: tiktokPolls.likeCount, polledAt: tiktokPolls.polledAt };
+
+          const [poll1hRows, poll2hRows, pollOldestRows] = await Promise.all([
+            db.select(pollCols).from(tiktokPolls)
+              .where(and(eq(tiktokPolls.marketId, market.id), gte(tiktokPolls.polledAt, poll1hWindow.from), lte(tiktokPolls.polledAt, poll1hWindow.to)))
+              .orderBy(desc(tiktokPolls.polledAt)).limit(1),
+            db.select(pollCols).from(tiktokPolls)
+              .where(and(eq(tiktokPolls.marketId, market.id), gte(tiktokPolls.polledAt, poll2hWindow.from), lte(tiktokPolls.polledAt, poll2hWindow.to)))
+              .orderBy(desc(tiktokPolls.polledAt)).limit(1),
+            db.select(pollCols).from(tiktokPolls)
+              .where(eq(tiktokPolls.marketId, market.id))
+              .orderBy(asc(tiktokPolls.polledAt)).limit(1),
+          ]);
+
+          const getMetric = (row: typeof poll1hRows[0]) =>
+            Number(market.questionType === "views" ? row.viewCount : row.likeCount);
+
+          const poll1hRaw = poll1hRows[0];
+          const poll2hRaw = poll2hRows[0];
+          const pollOldestRaw = pollOldestRows[0];
+
+          const relevantIsNull = (row: typeof poll1hRows[0]) =>
+            market.questionType === "views" ? row.viewCount === null : row.likeCount === null;
+
+          const poll1h = poll1hRaw && !relevantIsNull(poll1hRaw) ? poll1hRaw : undefined;
+          const poll2h = poll2hRaw && !relevantIsNull(poll2hRaw) ? poll2hRaw : undefined;
+          const pollOldest = pollOldestRaw && !relevantIsNull(pollOldestRaw) ? pollOldestRaw : undefined;
+
+          let recentVelocityPerHour: number | null = null;
+          let allTimeVelocityPerHour: number | null = null;
+          let priorVelocityPerHour: number | null = null;
+
+          const anchor = poll1h ?? pollOldest;
+
+          if (pollOldest) {
+            const allTimeWindowHours = (now - pollOldest.polledAt.getTime()) / 3_600_000;
+            if (allTimeWindowHours >= MIN_WINDOW_HOURS) {
+              const v = (currentMetric - getMetric(pollOldest)) / allTimeWindowHours;
+              allTimeVelocityPerHour = v > 0 ? v : null;
+            }
+          }
+
+          if (anchor) {
+            const recentWindowHours = (now - anchor.polledAt.getTime()) / 3_600_000;
+            if (recentWindowHours >= MIN_WINDOW_HOURS) {
+              const v = (currentMetric - getMetric(anchor)) / recentWindowHours;
+              recentVelocityPerHour = v > 0 ? v : null;
+            }
+            if (poll1h && poll2h && poll1h.id !== poll2h.id) {
+              const priorWindowHours = (poll1h.polledAt.getTime() - poll2h.polledAt.getTime()) / 3_600_000;
+              if (priorWindowHours > 0) {
+                const v = (getMetric(poll1h) - getMetric(poll2h)) / priorWindowHours;
+                priorVelocityPerHour = v > 0 ? v : null;
+              }
+            }
+          }
 
           const label = computeProjectionLabel({
             currentMetric,
-            metric24hAgo: oldMetric,
+            recentVelocityPerHour,
+            allTimeVelocityPerHour,
+            priorVelocityPerHour,
             milestoneThreshold: threshold,
             resolvesAt: market.resolvesAt,
           });

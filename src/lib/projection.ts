@@ -1,13 +1,22 @@
 import type { ProjectionLabel } from "@/db/schema";
 
+export const DECELERATION_THRESHOLD = 0.5;
+export const BREAKING_OUT_RATIO = 1.1;
+export const ON_TRACK_RATIO = 0.8;
+export const MIN_WINDOW_HOURS = 0.25;
+
 export function computeProjectionLabel({
   currentMetric,
-  metric24hAgo,
+  recentVelocityPerHour,
+  allTimeVelocityPerHour,
+  priorVelocityPerHour,
   milestoneThreshold,
   resolvesAt,
 }: {
   currentMetric: number;
-  metric24hAgo: number | null;
+  recentVelocityPerHour: number | null;
+  allTimeVelocityPerHour: number | null;
+  priorVelocityPerHour: number | null;
   milestoneThreshold: number;
   resolvesAt: Date;
 }): ProjectionLabel {
@@ -20,14 +29,23 @@ export function computeProjectionLabel({
 
   const requiredVelocity = viewsRemaining / hoursRemaining;
 
-  // < 24h of poll history — low-confidence fallback per spec
-  if (metric24hAgo === null) return "ON_TRACK";
+  if (recentVelocityPerHour === null || allTimeVelocityPerHour === null) return "AT_RISK";
 
-  const rollingVelocity = (currentMetric - metric24hAgo) / 24;
+  const effectiveVelocity = Math.min(recentVelocityPerHour, allTimeVelocityPerHour);
 
-  if (rollingVelocity <= 0) return "AT_RISK";
-  if (rollingVelocity >= 1.1 * requiredVelocity) return "BREAKING_OUT";
-  if (rollingVelocity >= 0.8 * requiredVelocity) return "ON_TRACK";
+  if (effectiveVelocity <= 0) return "AT_RISK";
+
+  const isDecelerating =
+    priorVelocityPerHour !== null &&
+    priorVelocityPerHour > 0 &&
+    recentVelocityPerHour < priorVelocityPerHour * DECELERATION_THRESHOLD &&
+    recentVelocityPerHour < requiredVelocity * BREAKING_OUT_RATIO;
+
+  if (isDecelerating) return "AT_RISK";
+
+  const ratio = effectiveVelocity / requiredVelocity;
+  if (ratio >= BREAKING_OUT_RATIO) return "BREAKING_OUT";
+  if (ratio >= ON_TRACK_RATIO) return "ON_TRACK";
   return "AT_RISK";
 }
 
