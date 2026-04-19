@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 
-function formatTimeRemaining(ms: number): string {
+export function formatTimeRemaining(ms: number): string {
   if (ms <= 0) return "Ended";
 
   const hours = Math.floor(ms / (1000 * 60 * 60));
