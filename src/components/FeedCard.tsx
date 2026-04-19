@@ -163,7 +163,7 @@ function ProgressBar({
     <div className="relative w-full">
       {/* Bar track */}
       <div
-        className="relative w-full h-[6px] bg-white/10 overflow-hidden cursor-pointer"
+        className="relative w-full h-[6px] bg-white/10 overflow-hidden rounded-full cursor-pointer"
         onClick={(e) => {
           e.stopPropagation();
           setShowTooltip((v) => !v);
@@ -173,19 +173,9 @@ function ProgressBar({
           <div className="h-full w-full animate-pulse bg-white/10" />
         ) : (
           <>
-            {/* YES fill (green) */}
             <div
-              className="absolute left-0 top-0 h-full bg-green"
-              style={{ width: `${displayFill * priceYes * 100}%`, transition: transitionStyle }}
-            />
-            {/* NO fill (red) — starts where YES ends */}
-            <div
-              className="absolute top-0 h-full bg-red"
-              style={{
-                left: `${displayFill * priceYes * 100}%`,
-                width: `${displayFill * priceNo * 100}%`,
-                transition: transitionStyle,
-              }}
+              className="absolute left-0 top-0 h-full bg-accent"
+              style={{ width: `${displayFill * 100}%`, transition: transitionStyle }}
             />
             {/* User position tick — thin white line at current fill edge */}
             {userHasPosition && displayFill > 0 && (
