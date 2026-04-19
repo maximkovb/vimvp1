@@ -1,0 +1,74 @@
+[
+  {
+    "severity": "P1",
+    "title": "No server-side upper bound on trade amount",
+    "file": "src/lib/actions/trade.ts",
+    "line_hint": 95,
+    "description": "buyShares validates amount>=1 and userBalance>=amount but imposes no explicit upper ceiling on amount itself. If a bug elsewhere inflates a user balance, no independent server-side sanity cap exists as defence-in-depth. Additionally amount is typed as number so a float like 9.99 is accepted; LMSR uses the float and actualCost is also float, causing rounding drift over many trades.",
+    "autofix_class": "add_validation",
+    "suggested_fix": "At top of buyShares add: if (!Number.isFinite(amount) || amount > MAX_TRADE_COINS) return { error: amount-out-of-range }; and if (!Number.isInteger(amount)) return { error: amount-must-be-integer };",
+    "requires_verification": false,
+    "confidence": "high",
+    "pre_existing": false
+  },
+  {
+    "severity": "P2",
+    "title": "Missing third cache layer: balanceFetcher fetch lacks cache no-store",
+    "file": "src/lib/balance-fetcher.ts",
+    "line_hint": 13,
+    "description": "The route has force-dynamic and Cache-Control no-store but balanceFetcher calls fetch(url) with no cache option. The Next.js extended fetch cache operates independently of HTTP Cache-Control and may serve stale balance data. sliderMax becomes wrong; no direct financial exploit since server re-validates, but the three-layer fix stated in project memory is incomplete.",
+    "autofix_class": "add_cache_option",
+    "suggested_fix": "Change: const res = await fetch(url); to: const res = await fetch(url, { cache: no-store });",
+    "requires_verification": false,
+    "confidence": "high",
+    "pre_existing": false
+  },
+  {
+    "severity": "P2",
+    "title": "No explicit CSRF token; relies solely on SameSite cookies and Server Action origin check",
+    "file": "src/components/TradePanel.tsx",
+    "line_hint": 146,
+    "description": "buyShares as a Server Action carries built-in CSRF protection via Origin check. Zero explicit CSRF tokens exist in the codebase. The auth layer relies on NextAuth JWT with HttpOnly cookies whose CSRF defence depends entirely on the SameSite cookie attribute. Misconfiguration to SameSite=None or a future non-Action POST endpoint without CSRF validation would be exploitable. Current code is not directly vulnerable but the absence of any explicit CSRF layer is an architectural gap.",
+    "autofix_class": "documentation_and_guard",
+    "suggested_fix": "Verify NextAuth cookies enforce SameSite=Lax or Strict. Document that all state-mutating ops must go through Server Actions. Add middleware guard for any future POST/PUT/DELETE API routes.",
+    "requires_verification": true,
+    "confidence": "medium",
+    "pre_existing": true
+  },
+  {
+    "severity": "P3",
+    "title": "parseInt on adversarial input is safe — no bypass possible",
+    "file": "src/components/TradePanel.tsx",
+    "line_hint": 80,
+    "description": "parseInt(raw,10) stops at first non-digit: 1e9 yields 1 not a billion, 999abc yields 999, 0x10 yields 0. No input can exceed the first numeric digit run so no bypass of sliderMax clamp is possible via this vector. NaN is correctly handled by the isNaN fallback. Not a security vulnerability.",
+    "autofix_class": "none_required",
+    "suggested_fix": "No security action required. Optionally use Number(raw) with !Number.isFinite guard to reject scientific notation for UX clarity.",
+    "requires_verification": false,
+    "confidence": "high",
+    "pre_existing": false
+  },
+  {
+    "severity": "P3",
+    "title": "localInput rendered as controlled input value only — no XSS risk",
+    "file": "src/components/TradePanel.tsx",
+    "line_hint": 224,
+    "description": "localInput is bound to the value prop of a controlled React input element. React escapes all value-prop content and never injects it as innerHTML or passes it to dangerouslySetInnerHTML. No XSS vector exists.",
+    "autofix_class": "none_required",
+    "suggested_fix": "No action needed.",
+    "requires_verification": false,
+    "confidence": "high",
+    "pre_existing": false
+  },
+  {
+    "severity": "P3",
+    "title": "sellShares balance credit lacks atomic WHERE guard and no DB-level floor constraint exists",
+    "file": "src/lib/actions/trade.ts",
+    "line_hint": 333,
+    "description": "buyShares deducts balance atomically with WHERE balance>=actualCost. sellShares credits balance with a plain UPDATE with no guard condition, and no DB-level CHECK(balance>=0) constraint exists. If a future code path produces a negative refund due to an LMSR math edge case, balance goes negative silently. Pre-existing; not introduced by this change.",
+    "autofix_class": "add_db_constraint",
+    "suggested_fix": "Add CHECK (balance >= 0) constraint to users table at DB schema level as a hard backstop.",
+    "requires_verification": true,
+    "confidence": "medium",
+    "pre_existing": true
+  }
+]

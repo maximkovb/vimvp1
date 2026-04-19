@@ -16,7 +16,7 @@ export function ViewportReset() {
     meta.content = "width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover";
     setTimeout(() => {
       meta.content = original;
-    }, 0);
+    }, 100);
   }, [pathname]);
 
   return null;

@@ -30,11 +30,17 @@ export async function GET(request: Request) {
     .set({ status: "resolving" })
     .where(and(eq(markets.status, "halted"), sql`${markets.resolvesAt} <= ${now}`));
 
-  // Safety net: active markets past resolvesAt that missed the halt window
+  // Safety net: active markets past resolvesAt that missed the halt window.
+  // Two-step halt→resolving to close the trading window before resolution begins.
+  // A direct active→resolving would leave a gap where trades pass the status='active' guard.
+  await db
+    .update(markets)
+    .set({ status: "halted" })
+    .where(and(eq(markets.status, "active"), sql`${markets.resolvesAt} <= ${now}`));
   await db
     .update(markets)
     .set({ status: "resolving" })
-    .where(and(eq(markets.status, "active"), sql`${markets.resolvesAt} <= ${now}`));
+    .where(and(eq(markets.status, "halted"), sql`${markets.resolvesAt} <= ${now}`));
 
   // 3. Resolve RESOLVING markets via oracle
   const resolvingMarkets = await db
@@ -48,10 +54,13 @@ export async function GET(request: Request) {
       results.resolved.push(market.id);
     } catch (error) {
       console.error(`Failed to resolve market ${market.id}:`, error);
+      // Guard: don't overwrite status=resolved if a concurrent worker already succeeded.
+      // The thrown error could be the unique-constraint rollback from the concurrent worker's
+      // coin_transactions insert — in that case the market is already correctly resolved.
       await db
         .update(markets)
         .set({ status: "failed" })
-        .where(eq(markets.id, market.id));
+        .where(and(eq(markets.id, market.id), eq(markets.status, "resolving")));
       results.failed.push(market.id);
     }
   }

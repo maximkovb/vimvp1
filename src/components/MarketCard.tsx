@@ -1,6 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
-import { TIKTOK_THUMBNAIL_RE } from "@/lib/constants";
+import { TIKTOK_THUMBNAIL_RE, formatOutcome, isYes } from "@/lib/constants";
 import { MarketStatusBadge } from "./MarketStatusBadge";
 import { CountdownTimer } from "./CountdownTimer";
 import type { MarketStatus, QuestionType } from "@/db/schema";
@@ -65,13 +65,13 @@ export function MarketCard({
               variant={status === "halted" || status === "resolving" ? "urgent" : "default"}
             />
           )}
-          {status === "resolved" && (
+          {status === "resolved" && outcome !== null && (
             <span
               className={`text-xs font-bold ${
-                outcome === 1 ? "text-green" : "text-red"
+                isYes(outcome) ? "text-green" : "text-red"
               }`}
             >
-              {outcome === 1 ? "YES" : "NO"}
+              {formatOutcome(outcome)}
             </span>
           )}
         </div>

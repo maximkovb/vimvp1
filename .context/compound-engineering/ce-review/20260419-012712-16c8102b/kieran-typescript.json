@@ -1,0 +1,94 @@
+{
+  "reviewer": "kieran-typescript",
+  "findings": [
+    {
+      "id": "KT-001",
+      "severity": "high",
+      "confidence": 0.92,
+      "file": "src/lib/oracle.ts",
+      "line": 42,
+      "title": "outcome computed as number literal but schema accepts bare integer -- no 0|1 narrowing enforced at call sites",
+      "detail": "The ternary produces TypeScript type 0|1 via numeric literal inference, but distributePayout is typed outcome: number and the schema column is integer('outcome') with no $type annotation. The compiler therefore accepts any number at every call site. A union type Outcome = 0 | 1 exported from schema.ts and used on the column, the distributePayout signature, and markets.set({ outcome }) would close this gap.",
+      "suggestion": "Add export type Outcome = 0 | 1 to schema.ts. Annotate the column with .$type<Outcome | null>(). Change distributePayout(tx: Tx, marketId: string, outcome: Outcome) and the oracle local variable to that type."
+    },
+    {
+      "id": "KT-002",
+      "severity": "high",
+      "confidence": 0.9,
+      "file": "src/lib/services/payout.ts",
+      "line": 40,
+      "title": "parseFloat on a 6-decimal-place shares string loses precision before the DB sees the payout value",
+      "detail": "positions.shares is decimal(16,6) holding values like '12.345678'. parseFloat(p.shares).toFixed(2) converts to an IEEE-754 double first (losing sub-cent precision) then rounds to 2dp. The payout a user receives is truncated rather than correctly rounded. The same pattern repeats in refundPositions at line 85. PostgreSQL native ROUND(x::numeric, 2) respects the full stored precision.",
+      "suggestion": "Pass p.shares as a raw string into the SQL template and let Postgres do arithmetic. Use ROUND(shares::numeric, 2) in the VALUES list instead of the JS float round-trip."
+    },
+    {
+      "id": "KT-003",
+      "severity": "medium",
+      "confidence": 0.85,
+      "file": "src/lib/services/payout.ts",
+      "line": 40,
+      "title": "toFixed(2) rounding direction is implementation-defined after IEEE-754 conversion",
+      "detail": "After the float conversion, rounding for half-cent values (e.g. shares='10.005000') is implementation-defined across JS engines. coin_transactions stores decimal(12,2) so whatever JS produces is final. PostgreSQL ROUND uses round-half-away-from-zero for numeric, which is deterministic and expected.",
+      "suggestion": "Do all rounding in Postgres with ROUND(v::numeric, 2) so the database is the single source of truth for rounding direction."
+    },
+    {
+      "id": "KT-004",
+      "severity": "low",
+      "confidence": 0.82,
+      "file": "src/lib/oracle.ts",
+      "line": 43,
+      "title": "BigInt comparison is safe but the null guard is not self-documenting",
+      "detail": "metric !== null && metric >= market.milestoneThreshold is correct: viewCount/likeCount are bigint|null from Drizzle and milestoneThreshold is bigint. The comparison is safe for JS BigInt primitives. However a future reader may wonder whether undefined is also possible. A comment would prevent misreading.",
+      "suggestion": "Add inline comment: // viewCount/likeCount are bigint|null -- null means deleted/private, never undefined"
+    },
+    {
+      "id": "KT-005",
+      "severity": "medium",
+      "confidence": 0.78,
+      "file": "src/lib/services/payout.ts",
+      "line": 5,
+      "title": "Tx type inferred from db.transaction parameters is fragile across Drizzle version bumps",
+      "detail": "type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0] extracts the transaction callback first parameter by positional indexing. If Drizzle changes the overload signature or callback parameter position the inferred type silently becomes unknown or a different interface, breaking distributePayout and refundPositions callers at runtime before the compiler catches it.",
+      "suggestion": "Pin drizzle-orm to a patch range in package.json and add a compile-time type assertion test (tsd or expect-type) so a version bump surfaces the breakage at CI time rather than runtime."
+    },
+    {
+      "id": "KT-006",
+      "severity": "medium",
+      "confidence": 0.8,
+      "file": "src/app/api/cron/resolve-markets/route.ts",
+      "line": 50,
+      "title": "Failed-market status update runs outside the resolution transaction -- leaves outcome null with no type enforcement",
+      "detail": "When resolveMarket throws, the catch block does db.update(markets).set({ status: 'failed' }) on the outer db connection outside any transaction. The market ends up with outcome: null and resolvedAt: null in the failed state. The type system cannot express that failed always implies outcome IS NULL, so future readers querying a failed market may assume outcome is populated.",
+      "suggestion": "Document in the MarketStatus type (or via JSDoc) that failed implies outcome: null. Optionally add a runtime assertion after any transition into failed that verifies outcome is null."
+    }
+  ],
+  "residual_risks": [
+    {
+      "id": "RR-001",
+      "title": "outcome=0 means YES in schema comment but oracle returns 1 when milestone is met -- possible domain inversion",
+      "detail": "The schema comment says 0=YES, 1=NO. The oracle ternary returns 1 when metric >= milestoneThreshold (milestone met). So meeting a milestone produces outcome=1, which distributePayout uses to query positions.outcome=1, meaning NO holders are paid when the milestone is met. This is either intentional (YES holders bet it would happen, but they are outcome=0 and get paid only when outcome=0) or there is a domain inversion. The bare integer type makes this impossible for the compiler to catch. Explicit verification against business intent is required."
+    },
+    {
+      "id": "RR-002",
+      "title": "Unique index on coin_transactions covers (userId, referenceId, type) -- semantically brittle if partial payouts are ever added",
+      "detail": "For payouts, referenceId is the marketId. The unique index enforces one payout row per (user, market) not per (user, market, outcome). In the current model only one outcome can win so this is fine, but the constraint would silently block a legitimate second payout row (e.g. bonus or partial payout) for the same user/market pair in a future extension."
+    }
+  ],
+  "testing_gaps": [
+    {
+      "id": "TG-001",
+      "title": "No test verifying which position holders are paid when milestone is met",
+      "detail": "Given RR-001, there is no evidence of a unit test for distributePayout with known position fixtures that asserts YES holders vs NO holders receive funds for a given outcome value. A test with two positions (one YES, one NO) for outcome=1 would immediately surface whether the query targets the correct side."
+    },
+    {
+      "id": "TG-002",
+      "title": "No test for parseFloat precision loss on shares values near rounding boundaries",
+      "detail": "KT-002 and KT-003 describe float round-trip precision loss. There is no test verifying that a position with shares='10.005000' produces the expected payout amount. A parametric test over shares strings with 6 decimal places would catch JS-vs-Postgres rounding disagreements."
+    },
+    {
+      "id": "TG-003",
+      "title": "No integration test for resolveMarket idempotency under concurrent invocations",
+      "detail": "The WHERE eq(markets.status, 'resolving') guard is the only concurrency barrier. There is no integration test that races two resolveMarket calls for the same market and asserts that only one payout batch fires and the coin_transactions unique index is not violated."
+    }
+  ]
+}

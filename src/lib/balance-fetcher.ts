@@ -10,7 +10,8 @@ export interface BalanceData {
  * cache keys and fire duplicate requests when multiple components subscribe.
  */
 export async function balanceFetcher(url: string): Promise<BalanceData> {
-  const res = await fetch(url);
+  const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error("Failed to fetch balance");
-  return res.json();
+  const data = await res.json() as BalanceData;
+  return data;
 }

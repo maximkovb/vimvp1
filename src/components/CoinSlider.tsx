@@ -29,9 +29,10 @@ export function CoinSlider({
   const isDragging = useRef(false);
 
   function valueFromPointer(clientX: number): number {
-    const rect = trackRef.current!.getBoundingClientRect();
+    if (!trackRef.current) return value;
+    const rect = trackRef.current.getBoundingClientRect();
     const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    return Math.max(min, Math.min(max, Math.round(ratio * max)));
+    return Math.max(min, Math.min(max, Math.round(min + ratio * (max - min))));
   }
 
   function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
@@ -52,10 +53,10 @@ export function CoinSlider({
 
   function handleSnapClick(pct: number) {
     if (disabled) return;
-    onChange(Math.max(min, Math.round(pct * max)));
+    onChange(Math.max(min, Math.min(max, Math.round(min + pct * (max - min)))));
   }
 
-  const ballPct = max > 0 ? ((value - min) / (max - min)) * 100 : 0;
+  const ballPct = max > min ? ((value - min) / (max - min)) * 100 : 0;
 
   return (
     <div className={disabled ? "opacity-50 pointer-events-none" : ""}>
@@ -67,6 +68,7 @@ export function CoinSlider({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
       >
         {/* Line */}
         <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-0.5 bg-border rounded-full" />

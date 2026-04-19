@@ -21,3 +21,23 @@ export const TIKTOK_VIDEO_ID_RE = /^\d{15,20}$/;
  * Applied to the creatorId param before inclusion in any outbound URL (SSRF guard).
  */
 export const TIKTOK_CREATOR_ID_RE = /^[a-zA-Z0-9._]{1,24}$/;
+
+// ---------------------------------------------------------------------------
+// Outcome encoding — single source of truth for the 0=YES / 1=NO convention.
+// All display components and filter queries must import from here.
+// ---------------------------------------------------------------------------
+
+/** Named constants for the integer outcome encoding used in the DB schema. */
+export const Outcome = { YES: 0, NO: 1 } as const;
+
+/** Returns "YES" or "NO" for a stored outcome integer. */
+export function formatOutcome(outcome: number): "YES" | "NO" {
+  if (outcome === Outcome.YES) return "YES";
+  if (outcome === Outcome.NO) return "NO";
+  throw new Error(`Unknown outcome value: ${outcome}`);
+}
+
+/** Returns true when outcome represents the YES side (outcome === 0). */
+export function isYes(outcome: number): boolean {
+  return outcome === Outcome.YES;
+}

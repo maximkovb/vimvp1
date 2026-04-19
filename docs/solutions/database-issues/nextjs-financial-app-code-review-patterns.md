@@ -190,7 +190,7 @@ await tx.execute(sql`
 
 **Problem:** The market state machine (`active → halted → resolving → resolved`) had a gap: if the cron ran infrequently or a market was created at the exact transition boundary, markets could skip the `halted` state and remain `active` past `resolvesAt` without ever moving to `resolving`.
 
-**Fix:** Add a catch-all transition alongside the normal path:
+**Fix:** Add a catch-all two-step transition alongside the normal path. The safety net must go through `halted` first — never directly `active → resolving`. The `halted` state is the trade-closing gate; bypassing it leaves a window where trades pass the `status='active'` guard while resolution is computing payouts.
 
 ```typescript
 // src/app/api/cron/resolve-markets/route.ts
@@ -203,12 +203,14 @@ await db.update(markets).set({ status: "halted" })
 await db.update(markets).set({ status: "resolving" })
   .where(and(eq(markets.status, "halted"), sql`${markets.resolvesAt} <= ${now}`));
 
-// Safety net: active markets that missed the halt window
-await db.update(markets).set({ status: "resolving" })
+// Safety net: active markets that missed the halt window — two-step, not direct
+await db.update(markets).set({ status: "halted" })
   .where(and(eq(markets.status, "active"), sql`${markets.resolvesAt} <= ${now}`));
+await db.update(markets).set({ status: "resolving" })
+  .where(and(eq(markets.status, "halted"), sql`${markets.resolvesAt} <= ${now}`));
 ```
 
-**Principle:** State machines in distributed cron contexts must handle missed transitions. Each cron run should be idempotent and include catch-all recovery paths for every skippable state.
+**Principle:** State machines in distributed cron contexts must handle missed transitions. Each cron run should be idempotent and include catch-all recovery paths for every skippable state. Any path to `resolving` must pass through `halted` — this is not optional.
 
 ---
 

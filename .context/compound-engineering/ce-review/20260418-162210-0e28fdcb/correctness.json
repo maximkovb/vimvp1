@@ -1,0 +1,62 @@
+[
+  {
+    "severity": "P1",
+    "title": "ballPct is NaN when max === min, rendering `left: NaN%` on the thumb",
+    "file": "src/components/CoinSlider.tsx",
+    "line_hint": 58,
+    "description": "The guard `max > 0` does not prevent a division-by-zero when `max === min`. When a user's balance equals the slider minimum (e.g. balance=1, min=1), the expression `(value - min) / (max - min)` is `(1-1)/(1-1) = 0/0 = NaN`. This makes `ballPct = NaN`, which gets interpolated into the inline style as `left: NaN%`. React renders the attribute literally, the thumb disappears or lands at an undefined position, and the same NaN propagates to any downstream layout calculations. This is a real scenario: a user who spends down to exactly 1 coin will see a broken slider.",
+    "autofix_class": "safe_auto",
+    "suggested_fix": "Change the guard from `max > 0` to `max > min`:\n```ts\nconst ballPct = max > min ? ((value - min) / (max - min)) * 100 : 0;\n```\nThis clamps the ball to the left edge (0%) when the range is degenerate, which is the correct visual outcome.",
+    "requires_verification": false,
+    "confidence": "high",
+    "pre_existing": false
+  },
+  {
+    "severity": "P2",
+    "title": "valueFromPointer and handleSnapClick use wrong interpolation formula — excludes min from range",
+    "file": "src/components/CoinSlider.tsx",
+    "line_hint": 34,
+    "description": "Both `valueFromPointer` (line 34) and `handleSnapClick` (line 55) compute `Math.round(ratio * max)` instead of the correct linear interpolation `Math.round(ratio * (max - min) + min)`. When `min = 1` and `max = 500`, the drag formula maps the full track to the range [0, 500] rather than [1, 500]. The `Math.max(min, ...)` guard rescues the left-edge case (0 → clamped to 1), so functional correctness at the edges is preserved. However the midpoint error is `min/2` — with min=1 this is 0.5 coins (rounding noise), but if `min` is ever increased (e.g. to 10), mid-track values will be off by up to 5 coins. For snap buttons, `handleSnapClick(0.25)` with max=100 gives `Math.round(25) = 25` instead of `Math.round(0.25 * 99 + 1) = 26`. The snap-button highlight logic on line 94 uses the same formula, so the highlight matches the computed value — the two are consistent with each other but both consistently wrong when min > 1.",
+    "autofix_class": "safe_auto",
+    "suggested_fix": "Replace both occurrences:\n```ts\n// valueFromPointer\nreturn Math.max(min, Math.min(max, Math.round(ratio * (max - min) + min)));\n\n// handleSnapClick\nonChange(Math.max(min, Math.round(pct * (max - min) + min)));\n```\nThe snap-button highlight on line 94 should change to match:\n```ts\nvalue >= Math.max(min, Math.round(pct * (max - min) + min))\n```",
+    "requires_verification": false,
+    "confidence": "high",
+    "pre_existing": false
+  },
+  {
+    "severity": "P2",
+    "title": "Post-trade amount reset to 10 can exceed post-trade sliderMax before SWR revalidates",
+    "file": "src/components/TradePanel.tsx",
+    "line_hint": 156,
+    "description": "After `executeBuy` succeeds, `amount` is hard-reset to 10 (line 156) and `sliderMax` remains the pre-trade balance until SWR revalidates `/api/balance`. If the user just spent most of their coins (e.g. had 12 coins, spent 11), `sliderMax` will still read 12 for a brief window and then snap to 1 after revalidation. During that window the Buy button label reads \"Buy YES — 10 coins\" and the slider ball renders at `(10-1)/(12-1)*100 ≈ 82%` — visually plausible. The deeper problem is that if `sliderMax` after revalidation is less than 10, the displayed amount (10) exceeds the true maximum, and until the user interacts with the input no clamping occurs. The server will reject the trade if they attempt it, so this is not a money bug, but it is a misleading UI state.",
+    "autofix_class": "gated_auto",
+    "suggested_fix": "After `executeBuy`, await `mutate(\"/api/balance\")` before resetting `amount`, or reset `amount` to `Math.min(10, newSliderMax)` where `newSliderMax` is derived from the trade cost:\n```ts\nconst newBalance = balance - result.cost;\nconst resetAmount = Math.min(10, Math.max(1, newBalance));\nsetAmount(resetAmount);\nsetLocalInput(String(resetAmount));\n```\nThis requires access to the current `balance` value, which is already in scope.",
+    "requires_verification": true,
+    "confidence": "high",
+    "pre_existing": false
+  },
+  {
+    "severity": "P3",
+    "title": "commitInput silently clamps negative typed values to 1 with no user feedback",
+    "file": "src/components/TradePanel.tsx",
+    "line_hint": 83,
+    "description": "When a user types a negative number (e.g. \"-5\"), `parseInt(\"-5\", 10)` returns -5. `valid = -5`. `clamped = Math.min(Math.max(-5, 1), sliderMax) = 1`. Then `clamped < valid` evaluates `1 < -5` which is false, so `flashBalanceError()` is never called. The amount silently becomes 1 with no indication to the user why their input was changed. The `amount < 1` guard in `handleBuy` (line 166) would have caught it if they tried to submit without blurring, but after blur the value is already 1 so that path is never reached either.",
+    "autofix_class": "safe_auto",
+    "suggested_fix": "Change the flash condition to also cover inputs that were clamped upward from below the minimum:\n```ts\nif (clamped !== valid) flashBalanceError();\n```\nAlternatively use a distinct message for the under-minimum case (\"Minimum is 1 coin\") vs. the over-balance case.",
+    "requires_verification": false,
+    "confidence": "high",
+    "pre_existing": false
+  },
+  {
+    "severity": "P3",
+    "title": "balanceFetcher throws a generic Error on non-OK responses, losing HTTP status for SWR error handling",
+    "file": "src/lib/balance-fetcher.ts",
+    "line_hint": 14,
+    "description": "`balanceFetcher` throws `new Error(\"Failed to fetch balance\")` for any non-OK response, discarding the HTTP status code. The `/api/balance` route returns 401 for unauthenticated users and 404 if the user record is missing. SWR catches the thrown error and exposes it as `balanceFetchError`, but TradePanel (line 62) treats all errors identically — falling back to `userBalance ?? 500`. An unauthenticated user therefore silently gets a 500-coin slider, and any trade they attempt will be rejected server-side with an auth error. The component has no way to distinguish \"user not logged in\" from \"network error\" to show an appropriate message.",
+    "autofix_class": "advisory",
+    "suggested_fix": "Include the status in the thrown error so callers can branch:\n```ts\nif (!res.ok) {\n  const err = new Error(`Balance fetch failed: ${res.status}`);\n  (err as any).status = res.status;\n  throw err;\n}\n```\nIn TradePanel, check `(balanceFetchError as any)?.status === 401` to show a \"log in to trade\" message rather than silently enabling the slider.",
+    "requires_verification": true,
+    "confidence": "medium",
+    "pre_existing": false
+  }
+]

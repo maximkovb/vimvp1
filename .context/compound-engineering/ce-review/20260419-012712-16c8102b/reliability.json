@@ -1,0 +1,135 @@
+{
+  "reviewer": "reliability",
+  "findings": [
+    {
+      "id": "R-001",
+      "title": "distributePayout called unconditionally when market UPDATE matches 0 rows",
+      "severity": "critical",
+      "confidence": 0.95,
+      "file": "src/lib/oracle.ts",
+      "lines": [
+        47,
+        55
+      ],
+      "description": "resolveMarket issues UPDATE markets SET status=resolved WHERE status=resolving but never checks rows affected. A second concurrent invocation silently touches 0 rows then falls through to distributePayout unconditionally. The alreadyPaid check inside distributePayout finds the already-committed coinTransactions rows and returns early so no double-payment occurs. The protection comes from the downstream unique constraint on coinTransactions not an explicit guard in oracle.ts.",
+      "fix": "Capture rows-updated from the UPDATE using .returning() or rowCount. If 0 rows were updated return immediately before calling distributePayout."
+    },
+    {
+      "id": "R-002",
+      "title": "Manual-resolve route accepts resolving status enabling operator-triggered race with in-flight cron",
+      "severity": "critical",
+      "confidence": 0.9,
+      "file": "src/app/api/admin/markets/[id]/resolve/route.ts",
+      "lines": [
+        62,
+        74
+      ],
+      "description": "The manual-resolve route allows markets with status=resolving to be resolved with a caller-supplied outcome. If an automated resolveMarket transaction is in-flight but not yet committed the manual route enters its own transaction and calls distributePayout with a potentially different outcome. Both transactions race to commit. The first to insert into coinTransactions wins the unique constraint the second rolls back. If the operator-supplied outcome differs and the manual route commits first users are paid for the wrong side.",
+      "fix": "Remove resolving from the allowed statuses. Only failed markets should be manually resolvable."
+    },
+    {
+      "id": "R-003",
+      "title": "Non-locking SELECT on resolving markets allows concurrent cron to corrupt a correctly resolved market to failed",
+      "severity": "high",
+      "confidence": 0.92,
+      "file": "src/app/api/cron/resolve-markets/route.ts",
+      "lines": [
+        39,
+        57
+      ],
+      "description": "Two concurrent cron GET requests execute SELECT FROM markets WHERE status=resolving without FOR UPDATE or any advisory lock. Both receive the same market IDs and call resolveMarket concurrently. The first transaction commits. The second hits the unique constraint on coinTransactions and rolls back entirely -- no double payment. But the cron catch block then writes status=failed unconditionally overwriting the correctly-resolved market.",
+      "fix": "Use SELECT FOR UPDATE SKIP LOCKED on the resolving markets query. Alternatively in the catch block re-read market status before writing failed and skip if already resolved."
+    },
+    {
+      "id": "R-004",
+      "title": "Cron catch handler unconditionally writes failed capable of overwriting a successfully resolved market",
+      "severity": "high",
+      "confidence": 0.95,
+      "file": "src/app/api/cron/resolve-markets/route.ts",
+      "lines": [
+        49,
+        55
+      ],
+      "description": "The catch block after resolveMarket writes status=failed without re-checking current market status. In the concurrent-cron race from R-003 the second invocation catches a constraint violation from an already-committed payout. Its inner transaction rolled back cleanly leaving market as resolved but the outer catch handler then writes failed onto that fully resolved market.",
+      "fix": "Before writing failed in the catch block re-query the market status. If it is already resolved log a warning and skip the status update."
+    },
+    {
+      "id": "R-005",
+      "title": "Market row and poll row read outside the transaction creating a TOCTOU window on outcome computation",
+      "severity": "medium",
+      "confidence": 0.82,
+      "file": "src/lib/oracle.ts",
+      "lines": [
+        19,
+        44
+      ],
+      "description": "The market record and latest tiktokPoll are fetched before the transaction opens. The computed outcome is written inside the transaction. A new poll inserted between the pre-read and the transaction commit would be ignored potentially causing an incorrect outcome.",
+      "fix": "Move both SELECT statements inside the db.transaction() callback so they execute within the same read snapshot as the UPDATE."
+    },
+    {
+      "id": "R-006",
+      "title": "Safety-net ACTIVE to RESOLVING transition bypasses the trading halt window",
+      "severity": "medium",
+      "confidence": 0.88,
+      "file": "src/app/api/cron/resolve-markets/route.ts",
+      "lines": [
+        34,
+        37
+      ],
+      "description": "When a market misses the haltsAt window the safety net moves it directly from active to resolving. If the trade action only blocks submissions for halted and resolving markets but not active a trade committed between the safety-net UPDATE and the resolveMarket call affects quantityYes/quantityNo and positions meaning distributePayout pays out shares that include post-expiry trades.",
+      "fix": "Apply ACTIVE to HALTED first then HALTED to RESOLVING within the same cron tick. Or ensure the trade action rejects markets where resolvesAt <= now regardless of status."
+    },
+    {
+      "id": "R-007",
+      "title": "Winning shares not zeroed after payout leaving stale non-zero balances in positions table",
+      "severity": "low",
+      "confidence": 0.8,
+      "file": "src/lib/services/payout.ts",
+      "lines": [
+        11,
+        66
+      ],
+      "description": "distributePayout credits user balances and inserts coinTransactions but does not zero the shares column on paid positions. The coinTransactions unique constraint prevents double-payment so this is not a financial safety issue. But positions permanently shows non-zero shares for resolved markets inconsistent with refundPositions which zeros shares on cancel.",
+      "fix": "After the coinTransactions bulk INSERT issue a bulk UPDATE on positions to zero shares for paid positions mirroring refundPositions."
+    }
+  ],
+  "residual_risks": [
+    {
+      "id": "RR-001",
+      "description": "The Neon pool is configured with max=1 connection (src/db/index.ts line 15). This accidentally serializes concurrent requests at the connection level masking the concurrency races in R-003 and R-004. If max is increased for production scale all races become immediately exploitable. Do not defer fixes assuming the pool constraint will continue to protect the system.",
+      "likelihood": "medium"
+    },
+    {
+      "id": "RR-002",
+      "description": "The three status transition UPDATEs in the cron are not wrapped in a transaction. A process crash between them leaves markets in intermediate states. The next cron run recovers but the delay could exceed the intended resolution window.",
+      "likelihood": "low"
+    },
+    {
+      "id": "RR-003",
+      "description": "Payout amounts use parseFloat(shares).toFixed(2) discarding sub-cent precision. Accumulated rounding creates a discrepancy between total coins collected and total coins paid out.",
+      "likelihood": "low"
+    }
+  ],
+  "testing_gaps": [
+    {
+      "id": "TG-001",
+      "description": "No test for concurrent resolveMarket calls on the same marketId. A test firing two overlapping transactions would confirm whether R-003 produces an incorrect failed status regression on a correctly resolved market.",
+      "related_finding": "R-003"
+    },
+    {
+      "id": "TG-002",
+      "description": "No test verifying the cron catch block does not overwrite resolved status with failed. A test mocking resolveMarket to throw a constraint-violation error while the market is already resolved would catch this regression.",
+      "related_finding": "R-004"
+    },
+    {
+      "id": "TG-003",
+      "description": "No test for the manual-resolve route called on a market in resolving status. An integration test confirming the route rejects resolving (once R-002 fix is applied) is needed to prevent regression.",
+      "related_finding": "R-002"
+    },
+    {
+      "id": "TG-004",
+      "description": "No test for the safety-net ACTIVE to RESOLVING path. A market that never enters halted should have an end-to-end test verifying no trades are accepted during the direct transition window.",
+      "related_finding": "R-006"
+    }
+  ]
+}

@@ -3,6 +3,10 @@ import { NextResponse } from "next/server";
 
 export default auth((req) => {
   const { pathname } = req.nextUrl;
+
+  // API admin routes use bearer-token auth (verifyCronAuth) — pass through to route handler.
+  if (pathname.startsWith("/api/admin")) return;
+
   const isProtected =
     pathname.startsWith("/admin") ||
     pathname.startsWith("/portfolio") ||
@@ -15,5 +19,5 @@ export default auth((req) => {
 });
 
 export const config = {
-  matcher: ["/admin/:path*", "/portfolio/:path*", "/profile/:path*"],
+  matcher: ["/admin/:path*", "/api/admin/:path*", "/portfolio/:path*", "/profile/:path*"],
 };

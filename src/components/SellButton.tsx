@@ -15,7 +15,7 @@ export function SellButton({ marketId, outcome, maxShares }: SellButtonProps) {
   const router = useRouter();
   const { mutate } = useSWRConfig();
   const [showModal, setShowModal] = useState(false);
-  const [shares, setShares] = useState(maxShares.toFixed(1));
+  const [shares, setShares] = useState(String(maxShares));
   const [error, setError] = useState("");
   const [isPending, startTransition] = useTransition();
 
@@ -25,13 +25,11 @@ export function SellButton({ marketId, outcome, maxShares }: SellButtonProps) {
       setError("Enter a valid amount");
       return;
     }
-    if (numShares > maxShares) {
-      setError(`Max ${maxShares.toFixed(1)} shares`);
-      return;
-    }
+    // Clamp to maxShares to absorb any floating-point rounding discrepancy
+    const clamped = Math.min(numShares, maxShares);
 
     startTransition(async () => {
-      const result = await sellShares(marketId, outcome, numShares);
+      const result = await sellShares(marketId, outcome, clamped);
       if ("error" in result) {
         setError(result.error);
       } else {
@@ -60,19 +58,28 @@ export function SellButton({ marketId, outcome, maxShares }: SellButtonProps) {
         <h3 className="font-semibold mb-4">Sell Shares</h3>
         <div className="mb-3">
           <label className="text-xs text-muted">
-            Shares to sell (max {maxShares.toFixed(1)})
+            Shares to sell (max {maxShares.toFixed(2)})
           </label>
-          <input
-            type="number"
-            value={shares}
-            onChange={(e) => {
-              setShares(e.target.value);
-              setError("");
-            }}
-            max={maxShares}
-            step="0.1"
-            className="w-full px-3 py-2 mt-1 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent"
-          />
+          <div className="flex gap-2 mt-1">
+            <input
+              type="number"
+              value={shares}
+              onChange={(e) => {
+                setShares(e.target.value);
+                setError("");
+              }}
+              max={maxShares}
+              step="0.01"
+              className="flex-1 px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent"
+            />
+            <button
+              type="button"
+              onClick={() => { setShares(String(maxShares)); setError(""); }}
+              className="px-3 py-2 text-xs border border-border rounded-lg hover:bg-card-hover transition-colors whitespace-nowrap"
+            >
+              Max
+            </button>
+          </div>
         </div>
         {error && (
           <p className="text-sm text-red mb-3">{error}</p>

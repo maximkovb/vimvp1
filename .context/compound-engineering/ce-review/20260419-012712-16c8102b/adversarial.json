@@ -1,0 +1,197 @@
+{
+  "reviewer": "adversarial",
+  "findings": [
+    {
+      "id": "ADV-001",
+      "title": "Outcome inversion: milestone hit pays NO bettors and gives nothing to YES winners",
+      "severity": "critical",
+      "confidence": 0.97,
+      "category": "wrong-winner payment",
+      "evidence": [
+        "schema.ts line 106: outcome integer, 0=YES 1=NO",
+        "oracle.ts line 43 ternary: when metric >= milestoneThreshold the expression evaluates to 1",
+        "Schema value 1 means NO. distributePayout queries WHERE positions.outcome = 1 which selects NO-side positions.",
+        "YES bettors who correctly predicted the milestone would be reached receive nothing.",
+        "NO bettors who bet the milestone would NOT be reached receive all payouts.",
+        "Complete inversion: the losing side is paid, the winning side receives nothing."
+      ],
+      "affected_files": [
+        "src/lib/oracle.ts",
+        "src/db/schema.ts",
+        "src/lib/services/payout.ts"
+      ],
+      "autofix_class": "manual",
+      "owner": "human"
+    },
+    {
+      "id": "ADV-002",
+      "title": "Concurrent cron invocations double user balances in-flight; unique-constraint rollback is sole protection",
+      "severity": "critical",
+      "confidence": 0.88,
+      "category": "double-payment / race condition",
+      "evidence": [
+        "cron route: three bulk UPDATEs run outside any transaction, then SELECT all resolving markets, then for-loop resolveMarket with no row-level locking.",
+        "Two simultaneous cron invocations both SELECT the same list of resolving markets.",
+        "Both call resolveMarket(marketId). Both open db.transaction. Under READ COMMITTED both see status=resolving and pass the status guard.",
+        "T1 UPDATE WHERE status=resolving: 1 row affected. T2 UPDATE: row is locked by T1, T2 waits. After T1 commits T2 re-evaluates the WHERE clause against committed data -- status is now resolved -- 0 rows affected.",
+        "oracle.ts has no rows-affected check. T2 unconditionally proceeds to call distributePayout(tx, marketId, outcome).",
+        "If T1 has not yet committed when T2 reads alreadyPaid, T2 sees an empty alreadyPaid set. T2 executes UPDATE users SET balance = balance + payout -- coins are doubled in-flight.",
+        "T2 then runs INSERT INTO coin_transactions. The unique index on (userId, referenceId, type) fires, aborting the T2 transaction and rolling back the balance UPDATE.",
+        "The unique index is the ONLY mechanism preventing permanent doubled balances. No application-level rows-affected guard exists as a fallback."
+      ],
+      "affected_files": [
+        "src/lib/oracle.ts",
+        "src/app/api/cron/resolve-markets/route.ts",
+        "src/lib/services/payout.ts"
+      ],
+      "autofix_class": "advisory",
+      "owner": "human"
+    },
+    {
+      "id": "ADV-003",
+      "title": "Manual resolve of already-resolved market with a different outcome pays both YES and NO bettors simultaneously",
+      "severity": "critical",
+      "confidence": 0.85,
+      "category": "double-payment / wrong-winner payment",
+      "evidence": [
+        "admin resolve route reads market.status, checks it is failed or resolving, then runs UPDATE markets SET status=resolved WHERE eq(markets.id, id) -- no status guard on the UPDATE itself.",
+        "Scenario: oracle resolves market with outcome=1 (NO bettors paid). Admin immediately calls POST /resolve with outcome=0 (YES).",
+        "Admin UPDATE has no WHERE status check, so it overwrites the record: status stays resolved, outcome is now 0, resolvedAt is refreshed.",
+        "Admin distributePayout(tx, id, 0) fires with outcome=0.",
+        "alreadyPaid reads coin_transactions: finds users already paid for outcome=1 positions (NO bettors). They are excluded from toPay.",
+        "YES (outcome=0) bettors were never paid by oracle. They are not in alreadyPaid. Admin distributePayout pays them.",
+        "Final state: NO bettors paid by oracle run, YES bettors paid by admin run. Both sides have payouts for the same market.",
+        "The unique index cannot prevent this: YES bettors have no prior payout record so there is no constraint to violate."
+      ],
+      "affected_files": [
+        "src/app/api/admin/markets/[id]/resolve/route.ts",
+        "src/lib/oracle.ts",
+        "src/lib/services/payout.ts"
+      ],
+      "autofix_class": "manual",
+      "owner": "human"
+    },
+    {
+      "id": "ADV-004",
+      "title": "distributePayout called unconditionally after 0-row market UPDATE in oracle pays the wrong-side bettors on stale re-invocation",
+      "severity": "high",
+      "confidence": 0.95,
+      "category": "wrong-winner payment",
+      "evidence": [
+        "oracle.ts: inside db.transaction, UPDATE markets WHERE id=X AND status=resolving runs first, then distributePayout(tx, marketId, outcome) is called unconditionally regardless of rows-affected count.",
+        "If the market was already resolved (status=resolved) when this transaction runs, the UPDATE touches 0 rows and the market record is unchanged.",
+        "distributePayout still executes with whatever outcome THIS oracle invocation computed, which may differ from the outcome that was used in the first resolution.",
+        "Example: market was first resolved with outcome=0 (YES bettors paid). Oracle re-runs due to cron overlap, computes outcome=1 (NO). UPDATE touches 0 rows. distributePayout fires with outcome=1.",
+        "alreadyPaid filters out YES bettors already in coin_transactions. NO bettors who were never paid are not in alreadyPaid.",
+        "distributePayout pays NO bettors. Result: YES bettors paid by first resolution, NO bettors paid by stale second invocation -- both sides receive payouts.",
+        "Fix: read rows-affected from the UPDATE result and return early (or throw) when 0 rows were updated."
+      ],
+      "affected_files": [
+        "src/lib/oracle.ts",
+        "src/lib/services/payout.ts"
+      ],
+      "autofix_class": "manual",
+      "owner": "human"
+    },
+    {
+      "id": "ADV-005",
+      "title": "Cron failure handler overwrites status=resolved with status=failed outside any transaction, enabling admin re-resolve with wrong outcome",
+      "severity": "medium",
+      "confidence": 0.82,
+      "category": "cascade / state corruption",
+      "evidence": [
+        "cron route lines 49-54: if resolveMarket throws, the catch block calls db.update(markets).set({status:failed}) WHERE eq(markets.id, market.id) with no transaction and no guard against overwriting status=resolved.",
+        "Scenario: T1 resolveMarket commits successfully -- market is now status=resolved with payouts issued.",
+        "T2 (second concurrent cron invocation) also called resolveMarket for the same market. Inside T2 distributePayout INSERT hits the unique constraint, throws. T2 transaction rolls back. The exception propagates to T2 catch block.",
+        "T2 catch block sets status=failed, overwriting the committed status=resolved.",
+        "Market is now status=failed with all payouts already correctly issued. Admin sees a failed market and triggers POST /resolve.",
+        "Admin distributePayout: alreadyPaid is populated, toPay is empty, no coins paid. Market is now re-resolved with the admin-chosen outcome, which may differ from the outcome used to issue the original payouts.",
+        "Ledger and market record are inconsistent: coin_transactions show payouts for outcome A, market.outcome column records outcome B."
+      ],
+      "affected_files": [
+        "src/app/api/cron/resolve-markets/route.ts",
+        "src/lib/oracle.ts"
+      ],
+      "autofix_class": "advisory",
+      "owner": "human"
+    },
+    {
+      "id": "ADV-006",
+      "title": "Shares never zeroed after payout; double-payment relies solely on ledger idempotency with no position-layer defense",
+      "severity": "medium",
+      "confidence": 0.9,
+      "category": "double-payment (latent)",
+      "evidence": [
+        "refundPositions (cancel path) explicitly zeros shares: UPDATE positions SET shares=0 at end of function.",
+        "distributePayout (resolve path) never zeros shares -- no such UPDATE exists in the function.",
+        "The positions filter is WHERE shares != 0. After the first payout, shares remain non-zero, so any future distributePayout call passes the same positions through the filter unchanged.",
+        "The sole re-payment guard is the alreadyPaid set read from coin_transactions.",
+        "If any future code path issues a coin_transaction for the same (userId, marketId) with a different type value, the unique index on (userId, referenceId, type) would not block a new payout-type entry for that user.",
+        "Non-zero shares would then pass the filter and a second payout would be issued. The payout path has no defense-in-depth at the position layer."
+      ],
+      "affected_files": [
+        "src/lib/services/payout.ts"
+      ],
+      "autofix_class": "advisory",
+      "owner": "human"
+    },
+    {
+      "id": "ADV-007",
+      "title": "BigInt vs string comparison in oracle outcome calculation may throw TypeError, permanently stalling market resolution as failed",
+      "severity": "low",
+      "confidence": 0.65,
+      "category": "assumption violation",
+      "evidence": [
+        "schema.ts: milestoneThreshold declared as bigint({ mode: bigint }). tiktokPolls.viewCount and likeCount declared as bigint({ mode: bigint }).",
+        "Drizzle-orm with the bigint mode should return JS BigInt values from the database driver.",
+        "oracle.ts line 43: metric >= market.milestoneThreshold -- valid JavaScript only if both operands are the same type.",
+        "If the pg driver returns viewCount as a string (which is the default node-postgres behavior for BIGINT columns without explicit parseInputType configuration), metric will be a string.",
+        "String >= BigInt in JavaScript throws TypeError: Cannot mix BigInt and other types, as this is not a permitted coercion.",
+        "This exception propagates out of resolveMarket uncaught, is caught by the cron catch block, and the market is set to status=failed.",
+        "The market remains permanently stuck in failed status and will not auto-recover without admin intervention."
+      ],
+      "affected_files": [
+        "src/lib/oracle.ts",
+        "src/db/schema.ts"
+      ],
+      "autofix_class": "advisory",
+      "owner": "human"
+    }
+  ],
+  "residual_risks": [
+    {
+      "id": "RR-001",
+      "description": "The coinTransactions unique index on (userId, referenceId, type) is the sole application-level guard against double payment in all concurrent scenarios. If this index is dropped, recreated without the unique constraint, or bypassed by inserting with a different type value, balance UPDATEs would permanently double coins with no compensating rollback. No application-level rows-affected or re-entrancy check exists as a secondary defense."
+    },
+    {
+      "id": "RR-002",
+      "description": "distributePayout computes payout as parseFloat(p.shares).toFixed(2), truncating the 6-decimal-place shares column to 2 decimal places. Every winner is systematically underpaid by up to 0.004999 coins. Accumulated across many users and markets this is a non-trivial, compounding loss to users with no mechanism for correction."
+    },
+    {
+      "id": "RR-003",
+      "description": "No mutual exclusion mechanism (PostgreSQL advisory lock, SELECT FOR UPDATE on the market row, or serialized processing queue) exists between the oracle automatic resolution path and the manual admin resolution path. Both can enter distributePayout for the same market simultaneously. The unique-constraint-as-last-resort is the only coordination mechanism."
+    }
+  ],
+  "testing_gaps": [
+    {
+      "id": "TG-001",
+      "description": "No test exercises the oracle with metric >= milestoneThreshold and then asserts which side received payouts. The ADV-001 outcome inversion would be detected immediately by such a test.",
+      "suggested_test": "Create market with milestoneThreshold=100. Place YES bet (outcome=0 position) and NO bet (outcome=1 position). Insert poll record with viewCount=150. Call resolveMarket. Assert coin_transactions has exactly one payout row for the YES bettor and zero payout rows for the NO bettor."
+    },
+    {
+      "id": "TG-002",
+      "description": "No test exercises two concurrent calls to resolveMarket for the same market to verify the idempotency guard holds and user balances are not doubled.",
+      "suggested_test": "Invoke resolveMarket(id) twice concurrently using Promise.all. After both settle, assert user balance equals exactly the expected single-payout amount and coin_transactions contains exactly one payout row per winner."
+    },
+    {
+      "id": "TG-003",
+      "description": "No test verifies that distributePayout called when the market status UPDATE matches 0 rows does not issue any payouts.",
+      "suggested_test": "Resolve market with outcome=0. Immediately call resolveMarket again with a poll that produces outcome=1. Assert no new coin_transactions were created for outcome=1 position holders and user balances are unchanged."
+    },
+    {
+      "id": "TG-004",
+      "description": "No test covers the race between oracle auto-resolution and admin manual resolution using different outcome values.",
+      "suggested_test": "Resolve via oracle with outcome=1 (NO bettors paid). Then call admin POST /resolve with outcome=0. Assert total coins paid equals exactly the sum for one side only -- not both sides combined."
+    }
+  ]
+}

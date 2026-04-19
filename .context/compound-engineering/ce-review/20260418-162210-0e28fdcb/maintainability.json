@@ -1,0 +1,62 @@
+{
+  "reviewer": "maintainability",
+  "findings": [
+    {
+      "severity": "P2",
+      "title": "CoinSlider valueFromPointer ignores min in ratio-to-value mapping, creating a dead zone at the left end of the track",
+      "file": "src/components/CoinSlider.tsx",
+      "line_hint": 34,
+      "description": "valueFromPointer computes Math.round(ratio * max) then clamps to [min, max]. When min > 0 (always true: default is 1, TradePanel always passes 1) the pointer at the far-left yields 0, immediately clamped to min. The leftmost (min/max)*100% of track width is physically unreachable: dragging there always snaps to min rather than interpolating. The correct formula maps ratio=0 to min and ratio=1 to max: Math.round(min + ratio * (max - min)). The dead zone is silent but grows proportionally to sliderMax (= user balance). The snap-point dot highlight on line 94 uses the same Math.round(pct * max), so dots and drag values stay consistent once the drag formula is fixed.",
+      "autofix_class": "one_liner",
+      "suggested_fix": "Change line 34 to: return Math.max(min, Math.min(max, Math.round(min + ratio * (max - min))));",
+      "requires_verification": true,
+      "confidence": 0.88,
+      "pre_existing": false
+    },
+    {
+      "severity": "P2",
+      "title": "userBalance prop is never passed by any caller and silently dead-codes the three-tier fallback chain",
+      "file": "src/components/TradePanel.tsx",
+      "line_hint": 28,
+      "description": "TradePanelProps documents userBalance as an override that falls back from SWR. All three call sites (BetSheet.tsx:133, FeedCard.tsx:526, MarketHUD.tsx:197) omit this prop entirely. The fallback chain on line 62 -- balanceData?.balance ?? (userBalance ?? 500) -- therefore always resolves to the SWR value or the hardcoded 500 sentinel. The prop comment says it preserves pre-polish behavior, indicating a migration shim whose migration is complete. Keeping the prop inflates the public API, forces new readers to reason about three-tier fallback logic, and risks a future caller populating it expecting it to override SWR (it does not when the fetch succeeds).",
+      "autofix_class": "refactor",
+      "suggested_fix": "Remove userBalance from TradePanelProps and from the destructure. The balance line simplifies to: const balance = balanceData?.balance ?? 500;",
+      "requires_verification": true,
+      "confidence": 0.92,
+      "pre_existing": false
+    },
+    {
+      "severity": "P2",
+      "title": "executeBuy duplicates the amount-reset logic that commitInput and handleAmountChange already own",
+      "file": "src/components/TradePanel.tsx",
+      "line_hint": 156,
+      "description": "After a successful buy, executeBuy manually resets amount, localInput, isEditing, error, and staleConfirm (lines 156-160). The same five-setter reset sequence also appears individually across commitInput and handleAmountChange. There are three places that must stay in sync when the reset state set changes. If a user is mid-edit (isEditing=true, localInput holds uncommitted text) when the async transition settles, executeBuy resets isEditing correctly, but any blur/keydown event arriving after settlement will call commitInput on the now-stale localInput. The pattern is fragile and the duplication makes the risk non-obvious.",
+      "autofix_class": "refactor",
+      "suggested_fix": "Extract a resetToDefault() helper: function resetToDefault() { setAmount(10); setLocalInput(\"10\"); setIsEditing(false); setError(\"\"); setStaleConfirm(null); } and call it from executeBuy. commitInput does not need to call it -- it already sets all five items as part of its own flow.",
+      "requires_verification": false,
+      "confidence": 0.75,
+      "pre_existing": false
+    },
+    {
+      "severity": "P3",
+      "title": "Flash duration 1500ms is a bare magic number with no named constant",
+      "file": "src/components/TradePanel.tsx",
+      "line_hint": 76,
+      "description": "The balance-error flash duration is a bare 1500 literal. BetSheet.tsx uses the same literal (line 90) for a semantically different purpose (auto-dismiss on success). Neither is wrong today, but if UX polish changes the transient-message duration, the change must be hunted across files. The existing PRICE_STALENESS_THRESHOLD constant at the top of TradePanel establishes the pattern for named thresholds.",
+      "autofix_class": "one_liner",
+      "suggested_fix": "Add const BALANCE_ERROR_FLASH_MS = 1500; near PRICE_STALENESS_THRESHOLD and replace the literal on line 76.",
+      "requires_verification": false,
+      "confidence": 0.65,
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "TradePanel is approaching the size where the JSX (outcome buttons, amount row, payout panel, staleness warning, error, buy button) makes the component hard to scan in one pass. Each block is still small and shares closured state, so extraction is not yet warranted -- but adding a second error type or a third outcome would cross the threshold.",
+    "The non-null assertion on trackRef.current in CoinSlider line 32 will throw if a pointer event fires before the ref attaches. Not reachable in normal React rendering but worth noting for headless test environments."
+  ],
+  "testing_gaps": [
+    "CoinSlider valueFromPointer: no test covers min > 1 with the pointer at ratio near 0. The dead-zone bug would be caught by asserting onChange receives min (not 0) when the pointer is at the leftmost pixel.",
+    "TradePanel state reset: the interaction between a mid-edit isEditing=true state and a concurrent async executeBuy completing is exercised only through manual testing.",
+    "SWR cache deduplication: no test verifies that mounting both BalanceChip and TradePanel simultaneously fires only one /api/balance request -- the primary reason for extracting balanceFetcher to a shared module."
+  ]
+}

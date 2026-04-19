@@ -61,9 +61,9 @@ export function VideoStatsChart({
     });
 
     const series = chart.addSeries(AreaSeries, {
-      lineColor: "#6366f1",
-      topColor: "rgba(99, 102, 241, 0.3)",
-      bottomColor: "rgba(99, 102, 241, 0.0)",
+      lineColor: "#4169e1",
+      topColor: "rgba(65, 105, 225, 0.2)",
+      bottomColor: "rgba(65, 105, 225, 0.0)",
       lineWidth: 2,
       priceFormat: {
         type: "custom",

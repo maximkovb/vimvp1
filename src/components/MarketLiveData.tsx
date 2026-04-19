@@ -8,6 +8,7 @@ import { VideoStatsChart } from "@/components/VideoStatsChart";
 import { Toast } from "@/components/Toast";
 import { useToast } from "@/hooks/useToast";
 import { useMarketData } from "@/hooks/useMarketData";
+import { formatOutcome } from "@/lib/constants";
 
 interface MarketLiveDataProps {
   marketId: string;
@@ -154,7 +155,7 @@ export function MarketLiveData({
                       {trade.shares > 0 ? "BUY" : "SELL"}
                     </span>
                     <span className="font-medium">
-                      {trade.outcome === 1 ? "YES" : "NO"}
+                      {formatOutcome(trade.outcome)}
                     </span>
                     <span className="text-muted">
                       {Math.abs(trade.shares).toFixed(1)} shares

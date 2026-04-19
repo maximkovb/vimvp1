@@ -1,0 +1,50 @@
+[
+  {
+    "severity": "P2",
+    "title": "buyShares and sellShares server actions not documented in AGENTS.md",
+    "file": "AGENTS.md",
+    "line_hint": 52,
+    "description": "AGENTS.md documents the full market creation pipeline (video-stats, market-suggestion, POST /api/markets) and market inspection (GET /api/markets, GET /api/markets/[id]), but makes no mention of trading. An agent reading AGENTS.md has no documented path to execute trades via buyShares(marketId, outcome, amount) or sellShares(marketId, outcome, sharesToSell). Both are Next.js server actions ('use server') that accept plain data parameters and are fully agent-callable without any browser interaction. The capability exists but is hidden from agents by the documentation gap. This is a pre-existing gap -- the 'Place a Trade' UI polish did not introduce it, but it makes the gap more visible since trading is now a polished primary workflow.",
+    "autofix_class": "docs_only",
+    "suggested_fix": "Add a '## Trading' section to AGENTS.md documenting: (1) buyShares(marketId, outcome, amount) -- outcome is 0 for YES, 1 for NO, amount is coin integer >= 1; returns { success: true, shares, cost } or { error }. Requires authenticated session. (2) sellShares(marketId, outcome, sharesToSell) -- sharesToSell is number of shares to sell back; returns { success: true, refund } or { error }. Requires authenticated session. (3) previewTrade(marketId, outcome, amount) -- read-only preview returning { shares, cost, avgPrice, priceImpact, currentPrice, newPrice }; no auth required. Note that agents invoke these as Next.js server actions, not REST endpoints.",
+    "requires_verification": false,
+    "confidence": 0.95,
+    "pre_existing": true
+  },
+  {
+    "severity": "P2",
+    "title": "GET /api/balance not documented in AGENTS.md",
+    "file": "AGENTS.md",
+    "line_hint": 52,
+    "description": "AGENTS.md has no entry for GET /api/balance, which returns { balance, loginStreak, lastLoginReward } for the authenticated user. An agent that wants to check available funds before placing a trade has no documented way to do so. The endpoint is auth-required (returns 401 if unauthenticated), has force-dynamic set, and returns Cache-Control: no-store -- it is production-ready and agent-callable via a standard Bearer session token. This is a pre-existing documentation gap unrelated to the current UI changes.",
+    "autofix_class": "docs_only",
+    "suggested_fix": "Add to AGENTS.md under a '## User / Balance' section: 'GET /api/balance -- Returns authenticated user's coin balance and login streak. Auth: session cookie or equivalent. Response: { balance: number, loginStreak: number, lastLoginReward: string|null }. No bearer token accepted -- this endpoint uses NextAuth session auth, not CRON_SECRET.'",
+    "requires_verification": false,
+    "confidence": 0.92,
+    "pre_existing": true
+  },
+  {
+    "severity": "P3",
+    "title": "CoinSlider drag interaction and snap-point buttons are UI-only amount selection -- no parity gap because the underlying call accepts plain data",
+    "file": "src/components/CoinSlider.tsx",
+    "line_hint": 1,
+    "description": "The new CoinSlider component (custom drag track + snap buttons at 10/25/50/75/100% of balance) and the numeric text input in TradePanel are purely client-side amount-selection controls. They set the 'amount' integer that is passed to buyShares(marketId, outcome, amount). Agents bypass these controls entirely: buyShares accepts a plain integer, so an agent can express any amount directly without any browser interaction. The staleness check (fetch /api/markets/[id] before executing) is also available to agents via the documented GET /api/markets/[id] endpoint. No action-parity gap is introduced by this UI change.",
+    "autofix_class": "none",
+    "suggested_fix": "No fix required. Observation only: if AGENTS.md is updated per P2 findings above, it would be useful to mention the 1-coin minimum and that the amount is an integer number of coins, so agents do not need to replicate slider snap-point logic.",
+    "requires_verification": false,
+    "confidence": 0.97,
+    "pre_existing": false
+  },
+  {
+    "severity": "P3",
+    "title": "portfolio and leaderboard API endpoints are not documented in AGENTS.md",
+    "file": "AGENTS.md",
+    "line_hint": 52,
+    "description": "GET /api/portfolio and GET /api/leaderboard exist (confirmed by file listing at src/app/api/portfolio/route.ts and src/app/api/leaderboard/route.ts) but are absent from AGENTS.md. These are read-only context sources an agent would need when reasoning about a user's holdings or relative standing. Not introduced by the current change, and lower priority than trading parity.",
+    "autofix_class": "docs_only",
+    "suggested_fix": "After verifying the auth requirements and response shapes of /api/portfolio and /api/leaderboard, add concise entries to AGENTS.md similar to the existing Market Inspection section.",
+    "requires_verification": true,
+    "confidence": 0.72,
+    "pre_existing": true
+  }
+]

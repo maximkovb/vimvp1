@@ -4,6 +4,7 @@ import { eq, desc } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import { formatOutcome, isYes } from "@/lib/constants";
 
 export default async function HistoryPage() {
   const session = await auth();
@@ -39,8 +40,8 @@ export default async function HistoryPage() {
                 <tr className="border-b border-border text-muted">
                   <th className="text-left p-3 font-medium hidden sm:table-cell">Date</th>
                   <th className="text-left p-3 font-medium">Market</th>
-                  <th className="text-center p-3 font-medium hidden sm:table-cell">Side</th>
-                  <th className="text-center p-3 font-medium">Outcome</th>
+                  <th className="text-center p-3 font-medium">Side</th>
+                  <th className="text-center p-3 font-medium hidden sm:table-cell">Action</th>
                   <th className="text-right p-3 font-medium hidden sm:table-cell">Shares</th>
                   <th className="text-right p-3 font-medium">Cost</th>
                 </tr>
@@ -68,6 +69,17 @@ export default async function HistoryPage() {
                           {t.market.title}
                         </Link>
                       </td>
+                      <td className="p-3 text-center">
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                            isYes(t.trade.outcome)
+                              ? "bg-green/10 text-green"
+                              : "bg-red/10 text-red"
+                          }`}
+                        >
+                          {formatOutcome(t.trade.outcome)}
+                        </span>
+                      </td>
                       <td className="p-3 text-center hidden sm:table-cell">
                         <span
                           className={`px-1.5 py-0.5 rounded text-xs font-medium ${
@@ -77,17 +89,6 @@ export default async function HistoryPage() {
                           }`}
                         >
                           {isBuy ? "BUY" : "SELL"}
-                        </span>
-                      </td>
-                      <td className="p-3 text-center">
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-xs font-medium ${
-                            t.trade.outcome === 1
-                              ? "bg-green/10 text-green"
-                              : "bg-red/10 text-red"
-                          }`}
-                        >
-                          {t.trade.outcome === 1 ? "YES" : "NO"}
                         </span>
                       </td>
                       <td className="p-3 text-right hidden sm:table-cell">

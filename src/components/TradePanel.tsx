@@ -8,6 +8,7 @@ import { CoinSlider } from "./CoinSlider";
 import { balanceFetcher, type BalanceData } from "@/lib/balance-fetcher";
 
 const PRICE_STALENESS_THRESHOLD = 0.02;
+const BALANCE_ERROR_FLASH_MS = 1500;
 
 export interface TradeResult {
   outcome: number;
@@ -25,7 +26,6 @@ export interface TradePanelProps {
   prices: number[];       // [priceYes, priceNo]
   quantities: number[];   // [quantityYes, quantityNo]
   bParameter: number;
-  userBalance?: number;   // override for balance; falls back to SWR or 500
   initialOutcome?: number;
   yesTooltip?: string;
   noTooltip?: string;
@@ -37,7 +37,6 @@ export function TradePanel({
   prices,
   quantities,
   bParameter,
-  userBalance,
   initialOutcome,
   yesTooltip,
   noTooltip,
@@ -50,16 +49,17 @@ export function TradePanel({
   const [error, setError] = useState("");
   const [balanceError, setBalanceError] = useState("");
   const [isPending, startTransition] = useTransition();
+  const [isChecking, setIsChecking] = useState(false);
   const [staleConfirm, setStaleConfirm] = useState<StaleConfirm | null>(null);
   const balanceErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { data: balanceData, error: balanceFetchError } = useSWR<BalanceData>(
     "/api/balance",
-    balanceFetcher
+    balanceFetcher,
+    { revalidateOnFocus: false, revalidateOnReconnect: false }
   );
-  // If balance fetch fails, fall back to userBalance prop or 500 (preserves pre-polish behavior).
-  // Note: a failed fetch re-enables the slider at the fallback max — server rejects over-balance trades.
-  const balance = balanceData?.balance ?? (userBalance ?? 500);
+  // If balance fetch fails, fall back to 500 — server rejects over-balance trades.
+  const balance = balanceData?.balance ?? 500;
   const isBalanceLoading = !balanceData && !balanceFetchError;
   const sliderMax = balance;
 
@@ -73,14 +73,15 @@ export function TradePanel({
   function flashBalanceError() {
     setBalanceError("Not enough coins");
     if (balanceErrorTimerRef.current) clearTimeout(balanceErrorTimerRef.current);
-    balanceErrorTimerRef.current = setTimeout(() => setBalanceError(""), 1500);
+    balanceErrorTimerRef.current = setTimeout(() => setBalanceError(""), BALANCE_ERROR_FLASH_MS);
   }
 
   function commitInput(raw: string) {
     const parsed = parseInt(raw, 10);
     const valid = isNaN(parsed) ? 1 : parsed;
-    const clamped = Math.min(Math.max(valid, 1), sliderMax);
-    if (clamped < valid) flashBalanceError();
+    const effectiveMax = isNaN(sliderMax) ? 1 : sliderMax;
+    const clamped = Math.min(Math.max(valid, 1), effectiveMax);
+    if (clamped !== valid) flashBalanceError();
     setAmount(clamped);
     setLocalInput(String(clamped));
     setIsEditing(false);
@@ -118,9 +119,9 @@ export function TradePanel({
 
   async function checkStaleness(): Promise<boolean> {
     try {
-      const res = await fetch(`/api/markets/${marketId}`, { cache: "no-store" });
+      const res = await fetch(`/api/markets/${marketId}`, { cache: "no-store", signal: AbortSignal.timeout(8_000) });
       if (!res.ok) throw new Error("fetch failed");
-      const fresh = await res.json();
+      const fresh = await res.json() as { priceYes: number; priceNo: number; quantityYes: number; quantityNo: number; bParameter: number };
       const outcomeDelta = Math.abs(
         (outcome === 0 ? fresh.priceYes : fresh.priceNo) - prices[outcome]
       );
@@ -143,7 +144,14 @@ export function TradePanel({
 
   function executeBuy() {
     startTransition(async () => {
-      const result = await buyShares(marketId, outcome, amount);
+      let result;
+      try {
+        result = await buyShares(marketId, outcome, amount);
+      } catch {
+        setError("Trade failed. Please try again.");
+        setStaleConfirm(null);
+        return;
+      }
       if ("error" in result) {
         setError(result.error);
         setStaleConfirm(null);
@@ -153,8 +161,9 @@ export function TradePanel({
       const newQ = [...quantities];
       newQ[outcome] += result.shares;
       const priceAfter = allPrices(newQ, bParameter)[outcome];
-      setAmount(10);
-      setLocalInput("10");
+      const resetAmount = Math.min(10, Math.max(1, balance - result.cost));
+      setAmount(resetAmount);
+      setLocalInput(String(resetAmount));
       setIsEditing(false);
       setError("");
       setStaleConfirm(null);
@@ -169,11 +178,16 @@ export function TradePanel({
     }
     setError("");
     setStaleConfirm(null);
-    const canProceed = await checkStaleness();
-    if (canProceed) executeBuy();
+    setIsChecking(true);
+    try {
+      const canProceed = await checkStaleness();
+      if (canProceed) executeBuy();
+    } finally {
+      setIsChecking(false);
+    }
   }
 
-  const inputDisabled = !ready || isPending || isBalanceLoading;
+  const inputDisabled = !ready || isPending || isChecking || isBalanceLoading;
 
   return (
     <div className="bg-card border border-border rounded-xl p-4">
@@ -193,7 +207,7 @@ export function TradePanel({
             YES {(prices[0] * 100).toFixed(0)}%
           </button>
           {yesTooltip && (
-            <div className="absolute bottom-full left-0 mb-2 w-60 bg-black/90 text-white text-xs rounded-lg px-3 py-2 pointer-events-none opacity-0 group-hover:opacity-100 group-hover:delay-[2000ms] transition-opacity duration-150 z-50 leading-snug whitespace-normal">
+            <div className="absolute bottom-full left-0 mb-2 w-60 bg-card border border-border text-foreground text-xs rounded-lg px-3 py-2 pointer-events-none opacity-0 group-hover:opacity-100 group-hover:delay-[2000ms] transition-opacity duration-150 z-50 leading-snug whitespace-normal">
               {yesTooltip}
             </div>
           )}
@@ -210,7 +224,7 @@ export function TradePanel({
             NO {(prices[1] * 100).toFixed(0)}%
           </button>
           {noTooltip && (
-            <div className="absolute bottom-full right-0 mb-2 w-60 bg-black/90 text-white text-xs rounded-lg px-3 py-2 pointer-events-none opacity-0 group-hover:opacity-100 group-hover:delay-[2000ms] transition-opacity duration-150 z-50 text-right leading-snug whitespace-normal">
+            <div className="absolute bottom-full right-0 mb-2 w-60 bg-card border border-border text-foreground text-xs rounded-lg px-3 py-2 pointer-events-none opacity-0 group-hover:opacity-100 group-hover:delay-[2000ms] transition-opacity duration-150 z-50 text-right leading-snug whitespace-normal">
               {noTooltip}
             </div>
           )}
@@ -284,8 +298,8 @@ export function TradePanel({
 
       {/* Staleness warning */}
       {staleConfirm && (
-        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 mb-4 text-sm">
-          <p className="font-medium text-amber-600 dark:text-amber-400 mb-2">
+        <div className="bg-warning/10 border border-warning/30 rounded-lg p-3 mb-4 text-sm">
+          <p className="font-medium text-warning-text mb-2">
             Price moved! New payout: {staleConfirm.payoutAtFreshPrices.toFixed(1)} coins.
           </p>
           <div className="flex gap-2">
@@ -298,7 +312,7 @@ export function TradePanel({
             <button
               onClick={executeBuy}
               disabled={isPending}
-              className="flex-1 py-1.5 text-xs bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors disabled:opacity-50"
+              className="flex-1 py-1.5 text-xs bg-warning text-white rounded-lg hover:bg-warning/80 transition-colors disabled:opacity-50"
             >
               Buy anyway
             </button>
@@ -316,14 +330,14 @@ export function TradePanel({
       {/* Buy button */}
       <button
         onClick={handleBuy}
-        disabled={isPending || !ready || amount < 1 || !!staleConfirm}
+        disabled={isPending || isChecking || !ready || amount < 1 || !!staleConfirm}
         className={`w-full py-2.5 rounded-lg font-medium text-sm text-white transition-colors disabled:opacity-50 ${
           outcome === 0
             ? "bg-green hover:bg-green/80"
             : "bg-red hover:bg-red/80"
         }`}
       >
-        {isPending ? "Buying..." : `Buy ${outcome === 0 ? "YES" : "NO"} — ${amount} coins`}
+        {isPending ? "Buying..." : isChecking ? "Checking..." : `Buy ${outcome === 0 ? "YES" : "NO"} — ${amount} coins`}
       </button>
     </div>
   );

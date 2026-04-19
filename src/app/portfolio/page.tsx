@@ -1,11 +1,12 @@
 import { db } from "@/db";
 import { positions, markets, trades, users } from "@/db/schema";
-import { eq, and, desc, ne } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { price } from "@/lib/lmsr";
 import Link from "next/link";
 import { SellButton } from "@/components/SellButton";
+import { formatOutcome, isYes } from "@/lib/constants";
 import { DailyReward } from "@/components/DailyReward";
 
 export default async function PortfolioPage() {
@@ -47,7 +48,7 @@ export default async function PortfolioPage() {
     .where(
       and(
         eq(positions.userId, userId),
-        ne(positions.shares, "0")
+        sql`CAST(${positions.shares} AS DECIMAL) > 0.001`
       )
     );
 
@@ -119,7 +120,7 @@ export default async function PortfolioPage() {
           <div className="text-2xl font-bold">{balance.toFixed(0)}</div>
         </div>
         <div className="bg-card border border-border rounded-xl p-4">
-          <div className="text-sm text-muted">Open Positions</div>
+          <div className="text-sm text-muted">Position Value</div>
           <div className="text-2xl font-bold">{openValue.toFixed(0)}</div>
         </div>
         <div className="bg-card border border-border rounded-xl p-4">
@@ -136,16 +137,16 @@ export default async function PortfolioPage() {
         {positionsWithValue.length > 0 ? (
           <div className="bg-card border border-border rounded-xl overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm table-fixed">
                 <thead>
                   <tr className="border-b border-border text-muted">
                     <th className="text-left p-3 font-medium">Market</th>
-                    <th className="text-center p-3 font-medium">Side</th>
-                    <th className="text-right p-3 font-medium hidden sm:table-cell">Shares</th>
-                    <th className="text-right p-3 font-medium hidden sm:table-cell">Price</th>
-                    <th className="text-right p-3 font-medium">Value</th>
-                    <th className="text-right p-3 font-medium hidden sm:table-cell">P/L</th>
-                    <th className="text-right p-3 font-medium"></th>
+                    <th className="text-center p-3 font-medium w-16">Side</th>
+                    <th className="text-right p-3 font-medium hidden sm:table-cell w-20">Shares</th>
+                    <th className="text-right p-3 font-medium hidden sm:table-cell w-20">Price</th>
+                    <th className="text-right p-3 font-medium w-16">Value</th>
+                    <th className="text-right p-3 font-medium hidden sm:table-cell w-20">P/L</th>
+                    <th className="text-right p-3 font-medium w-14"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -154,7 +155,7 @@ export default async function PortfolioPage() {
                       key={p.position.id}
                       className="border-b border-border last:border-0 hover:bg-card-hover"
                     >
-                      <td className="p-3 max-w-0 overflow-hidden w-full">
+                      <td className="p-3 overflow-hidden">
                         <Link
                           href={`/markets/${p.market.id}`}
                           className="text-accent hover:underline line-clamp-1 block"
@@ -165,12 +166,12 @@ export default async function PortfolioPage() {
                       <td className="p-3 text-center">
                         <span
                           className={`px-1.5 py-0.5 rounded text-xs font-medium ${
-                            p.position.outcome === 1
+                            isYes(p.position.outcome)
                               ? "bg-green/10 text-green"
                               : "bg-red/10 text-red"
                           }`}
                         >
-                          {p.position.outcome === 1 ? "YES" : "NO"}
+                          {formatOutcome(p.position.outcome)}
                         </span>
                       </td>
                       <td className="p-3 text-right hidden sm:table-cell">
@@ -222,16 +223,16 @@ export default async function PortfolioPage() {
           <h2 className="text-lg font-semibold mb-3">Resolved</h2>
           <div className="bg-card border border-border rounded-xl overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm table-fixed">
                 <thead>
                   <tr className="border-b border-border text-muted">
                     <th className="text-left p-3 font-medium">Market</th>
-                    <th className="text-center p-3 font-medium hidden sm:table-cell">Your Bet</th>
-                    <th className="text-center p-3 font-medium">Result</th>
-                    <th className="text-right p-3 font-medium hidden sm:table-cell">Shares</th>
-                    <th className="text-right p-3 font-medium hidden sm:table-cell">Cost</th>
-                    <th className="text-right p-3 font-medium hidden sm:table-cell">Payout</th>
-                    <th className="text-right p-3 font-medium">Net P&L</th>
+                    <th className="text-center p-3 font-medium hidden sm:table-cell w-20">Your Bet</th>
+                    <th className="text-center p-3 font-medium w-16">Result</th>
+                    <th className="text-right p-3 font-medium hidden sm:table-cell w-20">Shares</th>
+                    <th className="text-right p-3 font-medium hidden sm:table-cell w-20">Cost</th>
+                    <th className="text-right p-3 font-medium hidden sm:table-cell w-20">Payout</th>
+                    <th className="text-right p-3 font-medium w-20">Net P&L</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -246,7 +247,7 @@ export default async function PortfolioPage() {
                         key={p.position.id}
                         className="border-b border-border last:border-0"
                       >
-                        <td className="p-3 max-w-0 overflow-hidden w-full">
+                        <td className="p-3 overflow-hidden">
                           <Link
                             href={`/markets/${p.market.id}`}
                             className="text-accent hover:underline line-clamp-1 block"
@@ -255,7 +256,7 @@ export default async function PortfolioPage() {
                           </Link>
                         </td>
                         <td className="p-3 text-center hidden sm:table-cell">
-                          {p.position.outcome === 1 ? "YES" : "NO"}
+                          {formatOutcome(p.position.outcome)}
                         </td>
                         <td className="p-3 text-center">
                           <span
@@ -321,7 +322,7 @@ export default async function PortfolioPage() {
                     {parseFloat(t.trade.shares) > 0 ? "BUY" : "SELL"}
                   </span>
                   <span className="font-medium shrink-0">
-                    {t.trade.outcome === 1 ? "YES" : "NO"}
+                    {formatOutcome(t.trade.outcome)}
                   </span>
                   <Link
                     href={`/markets/${t.market.id}`}

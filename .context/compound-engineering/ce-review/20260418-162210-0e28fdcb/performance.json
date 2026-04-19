@@ -1,0 +1,74 @@
+[
+  {
+    "severity": "P1",
+    "title": "balanceFetcher does not pass cache: 'no-store' — browser may serve stale balance from HTTP cache",
+    "file": "src/lib/balance-fetcher.ts",
+    "line_hint": 12,
+    "description": "balanceFetcher calls fetch(url) with no cache directive. The /api/balance route correctly returns 'Cache-Control: no-store' in its response headers, but browsers are not required to respect a response-level no-store directive for subsequent navigations that re-use the same fetch. The safe pattern for live-data SWR fetchers in this codebase (per feedback_nextjs_caching.md) is to also pass { cache: 'no-store' } in the fetch() call options. If the browser serves a cached 200 response, TradePanel will display a stale balance and the slider maximum will be wrong; the server-side trade guard still rejects over-balance trades, but the UX feedback will be confusing. BalanceChip shows wrong balance animation, and TradePanel blocks the submit until balance loads — if it loads from cache it will never re-fire for the real value.",
+    "autofix_class": "safe_auto",
+    "suggested_fix": "Change the fetch call to: const res = await fetch(url, { cache: 'no-store' });",
+    "requires_verification": false,
+    "confidence": "high",
+    "pre_existing": false
+  },
+  {
+    "severity": "P2",
+    "title": "FeedCard mounts TradePanel unconditionally for all active markets in the DOM — N SWR subscriptions created but only 1 fetch fires; subscription count grows with feed length",
+    "file": "src/components/FeedCard.tsx",
+    "line_hint": 526,
+    "description": "DiscoverFeed renders all feedMarkets at once in a snap-scroll list. Each FeedCard that is isTrading mounts a TradePanel, each of which calls useSWR('/api/balance', balanceFetcher). SWR deduplicates by key globally so only one HTTP request fires (correct), but N separate subscriptions are registered against the same cache entry. In practice for a typical feed of 10-20 cards this is negligible overhead. The concern is at scale: if the feed grows to 50+ cards or if future changes add a refreshInterval to this useSWR call, 50+ subscription callbacks will fire on every revalidation. The current implementation is safe at current data volumes but the pattern is worth noting.",
+    "autofix_class": "advisory",
+    "suggested_fix": "No immediate action required. If a refreshInterval is ever added to TradePanel's useSWR call, move balance subscription to a Context provider so only one subscription exists regardless of how many TradePanels are mounted. Alternatively, document the intentional reliance on SWR deduplication as a comment in TradePanel.",
+    "requires_verification": false,
+    "confidence": "high",
+    "pre_existing": false
+  },
+  {
+    "severity": "P2",
+    "title": "TradePanel's useSWR has no revalidateOnFocus: false — every tab focus triggers a balance refetch for every mounted TradePanel",
+    "file": "src/components/TradePanel.tsx",
+    "line_hint": 56,
+    "description": "SWR 2.x defaults revalidateOnFocus to true. With N TradePanels on screen, each window focus event causes SWR to schedule a revalidation. Because they all share the same key, SWR deduplication collapses these into a single in-flight fetch — that part is fine. However, once the fetch resolves, the result is broadcast to all N subscribers and each TradePanel re-renders. In a 20-card feed that is 20 synchronous component re-evaluations per focus event. BalanceChip already omits revalidateOnFocus (it uses fallbackData), but the useSWR in TradePanel does not opt out. The staleness risk from disabling on-focus revalidation here is low because the balance only changes after a trade, at which point the globalMutate in MarketHUD/BalanceChip already invalidates the key.",
+    "autofix_class": "gated_auto",
+    "suggested_fix": "Add { revalidateOnFocus: false, revalidateOnReconnect: false } to TradePanel's useSWR call: useSWR<BalanceData>('/api/balance', balanceFetcher, { revalidateOnFocus: false, revalidateOnReconnect: false }). The balance is invalidated via globalMutate after every trade so staleness risk is negligible.",
+    "requires_verification": true,
+    "confidence": "high",
+    "pre_existing": false
+  },
+  {
+    "severity": "P3",
+    "title": "flashBalanceError setTimeout callback calls setBalanceError on potentially unmounted component with no guard",
+    "file": "src/components/TradePanel.tsx",
+    "line_hint": 76,
+    "description": "flashBalanceError sets a 1500ms timer via balanceErrorTimerRef. The cleanup useEffect at line 67 clears the timer on unmount, which is correct. However, the cleanup runs only for the single effect registered at mount — if the component unmounts between the timer being set and firing, React 19 will emit a warning only if StrictMode is active, and in production the setState call on an unmounted component is silently ignored (React 18+ changed this to a no-op). This is not a memory leak because the ref is cleared. The pattern is correct. No fix needed — flagged as informational.",
+    "autofix_class": "advisory",
+    "suggested_fix": "No fix required. The existing cleanup in the useEffect at line 67 is correct. The pattern is safe in React 18+.",
+    "requires_verification": false,
+    "confidence": "high",
+    "pre_existing": false
+  },
+  {
+    "severity": "P3",
+    "title": "commitInput calls five sequential setState calls — batched in React 19 but only within synchronous event handlers",
+    "file": "src/components/TradePanel.tsx",
+    "line_hint": 79,
+    "description": "commitInput calls setAmount, setLocalInput, setIsEditing, setError, setStaleConfirm in sequence (lines 84-88). In React 19 all state updates inside event handlers, timeouts, and async functions are automatically batched via the automatic batching feature (available since React 18). Since commitInput is called from onBlur (a React synthetic event), all five setState calls will be batched into a single re-render. No performance issue. Confirmed safe.",
+    "autofix_class": "advisory",
+    "suggested_fix": "No action required. React 19 automatic batching covers this case.",
+    "requires_verification": false,
+    "confidence": "high",
+    "pre_existing": false
+  },
+  {
+    "severity": "P3",
+    "title": "BalanceChip animation effect has a second useEffect that reads animating state — potential double-render on balance change",
+    "file": "src/components/BalanceChip.tsx",
+    "line_hint": 129,
+    "description": "Two effects both depend on the balance value. The first (line 91) starts the rAF animation and sets animating=true. The second (line 129) runs whenever balance or animating changes, and calls setDisplayBalance when animating is false. On the initial SWR hydration where balance changes from initialBalance to the fetched value, both effects fire in the same commit. The first sets animating=true, which triggers the second effect to run again (since animating is a dependency) — but by then animating is true so the guard prevents setDisplayBalance. This is correct but means three effect invocations per balance update cycle. Not a functional bug, but it adds minor complexity. Pre-existing pattern, not introduced by the new SWR changes.",
+    "autofix_class": "advisory",
+    "suggested_fix": "Consider merging the sync effect into the animation effect's cleanup path, or using a single useEffect with a ref guard. Low priority — current behavior is correct and the overhead is negligible.",
+    "requires_verification": false,
+    "confidence": "medium",
+    "pre_existing": true
+  }
+]

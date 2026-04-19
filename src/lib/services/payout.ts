@@ -36,17 +36,16 @@ export async function distributePayout(tx: Tx, marketId: string, outcome: number
 
   if (toPay.length === 0) return;
 
-  const payoutValues = toPay.map((p) => ({
-    userId: p.userId,
-    payout: parseFloat(p.shares).toFixed(2),
-  }));
+  // Pass raw share strings to Postgres and round there — avoids IEEE-754 precision
+  // loss from parseFloat() before toFixed(2).
+  const payoutValues = toPay.map((p) => ({ userId: p.userId, shares: p.shares }));
 
   // Bulk UPDATE users balance using a VALUES CTE
   await tx.execute(sql`
     UPDATE users u
     SET balance = (u.balance::numeric + v.payout)::numeric
     FROM (VALUES ${sql.join(
-      payoutValues.map((p) => sql`(${p.userId}::text, ${p.payout}::numeric)`),
+      payoutValues.map((p) => sql`(${p.userId}::text, ROUND(${p.shares}::numeric, 2))`),
       sql`, `
     )}) AS v(user_id, payout)
     WHERE u.id = v.user_id
@@ -58,10 +57,20 @@ export async function distributePayout(tx: Tx, marketId: string, outcome: number
     VALUES ${sql.join(
       payoutValues.map(
         (p) =>
-          sql`(gen_random_uuid(), ${p.userId}, ${p.payout}::numeric, 'payout', ${marketId}, NOW())`
+          sql`(gen_random_uuid(), ${p.userId}, ROUND(${p.shares}::numeric, 2), 'payout', ${marketId}, NOW())`
       ),
       sql`, `
     )}
+  `);
+
+  // Zero out winning shares so position state is consistent post-resolution
+  // and any future distributePayout call finds nothing to pay via the shares != '0' filter.
+  await tx.execute(sql`
+    UPDATE positions
+    SET shares = '0'
+    WHERE market_id = ${marketId}
+      AND outcome = ${outcome}
+      AND shares != '0'
   `);
 }
 

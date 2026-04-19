@@ -92,7 +92,9 @@ export async function buyShares(
 ): Promise<{ success: true; shares: number; cost: number } | { error: string }> {
   const session = await auth();
   if (!session?.user?.id) return { error: "Not authenticated" };
+  if (!Number.isFinite(amount) || !Number.isInteger(amount)) return { error: "Amount must be a whole number" };
   if (amount < 1) return { error: "Minimum trade is 1 coin" };
+  if (amount > 1_000_000) return { error: "Amount exceeds maximum trade size" };
   if (outcome !== 0 && outcome !== 1) return { error: "Invalid outcome" };
 
   const userId = session.user.id;
@@ -351,7 +353,7 @@ export async function sellShares(
 
         // Update position
         const remainingShares = currentShares - sharesToSell;
-        if (remainingShares <= 0.000001) {
+        if (remainingShares <= 0.01) {
           await tx
             .update(positions)
             .set({ shares: "0" })

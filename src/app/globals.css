@@ -13,6 +13,8 @@
   --green: #22c55e;
   --red: #ef4444;
   --muted: #6b6b6b;
+  --warning: #f59e0b;
+  --warning-text: #b45309;
 }
 
 @theme inline {
@@ -26,6 +28,8 @@
   --color-green: var(--green);
   --color-red: var(--red);
   --color-muted: var(--muted);
+  --color-warning: var(--warning);
+  --color-warning-text: var(--warning-text);
 }
 
 /* Prevent page-level horizontal overflow from triggering iOS viewport zoom.

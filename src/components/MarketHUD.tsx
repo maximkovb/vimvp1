@@ -132,12 +132,23 @@ export function MarketHUD({ marketId, session, initialData }: MarketHUDProps) {
       </div>
 
       {/* Projection badge + explanation */}
-      {market.projectionLabel && (() => {
+      {(() => {
+        const ended = market.status === "resolved" || market.status === "failed" || market.status === "cancelled";
+        if (ended) {
+          return (
+            <div className="flex items-center gap-2 mb-3">
+              <span className="px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wide bg-muted/20 text-muted border border-muted/20">
+                Ended
+              </span>
+            </div>
+          );
+        }
+        if (!market.projectionLabel) return null;
         const label = market.projectionLabel as ProjectionLabel;
         const styles: Record<ProjectionLabel, string> = {
           ON_TRACK:     "bg-green-500/20 text-green-400 border border-green-500/40",
           AT_RISK:      "bg-amber-500/20 text-amber-400 border border-amber-500/40",
-          BREAKING_OUT: "bg-purple-500/20 text-purple-400 border border-purple-500/40",
+          BREAKING_OUT: "bg-blue-500/20 text-blue-400 border border-blue-500/40",
         };
         const display: Record<ProjectionLabel, string> = {
           ON_TRACK: "On Track", AT_RISK: "At Risk", BREAKING_OUT: "Breaking Out",
