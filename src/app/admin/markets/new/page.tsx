@@ -167,47 +167,50 @@ export default function CreateMarketPage() {
       }
       setVideoStats(statsResult);
 
-      // Phase 2: channel analytics + market suggestion (~5–15s)
-      setIsGeneratingSuggestion(true);
-      const suggestionResult = await generateMarketSuggestion({
-        videoId: statsResult.videoId,
-        title: statsResult.title,
-        channelId: statsResult.channelId,
-        channelTitle: statsResult.channelTitle,
-        publishedAt: statsResult.publishedAt,
-        categoryId: statsResult.categoryId,
-        viewCount: statsResult.viewCount,
-        likeCount: statsResult.likeCount,
-      });
-      if (token.canceled) return;
-      setIsGeneratingSuggestion(false);
+      // Phase 2: channel analytics + market suggestion — YouTube only
+      // TikTok has no equivalent channel analytics API
+      if (statsResult.platform !== "tiktok" && statsResult.channelId) {
+        setIsGeneratingSuggestion(true);
+        const suggestionResult = await generateMarketSuggestion({
+          videoId: statsResult.videoId,
+          title: statsResult.title,
+          channelId: statsResult.channelId,
+          channelTitle: statsResult.channelTitle,
+          publishedAt: statsResult.publishedAt,
+          categoryId: statsResult.categoryId,
+          viewCount: statsResult.viewCount,
+          likeCount: statsResult.likeCount,
+        });
+        if (token.canceled) return;
+        setIsGeneratingSuggestion(false);
 
-      if ("error" in suggestionResult) {
-        setError(suggestionResult.error ?? "Unknown error");
-        return;
-      }
-      setSuggestion(suggestionResult);
-
-      if (suggestionResult.contract) {
-        const aiMilestone = suggestionResult.contract.milestoneThreshold;
-        const clampedMilestone = computeMilestoneFloor(aiMilestone, statsResult.viewCount);
-        const safeResolutionHours = suggestionResult.contract.resolutionHours;
-        setMilestoneThreshold(String(clampedMilestone));
-        setBParameter(String(suggestionResult.contract.bParameter));
-        setResolutionHours(String(safeResolutionHours));
-        setRiskTier(suggestionResult.contract.riskTier);
-        // Anchor is the raw AI suggestion — used as reference for proportional scaling.
-        // The initial displayed value may be floor-clamped, but the anchor stays at AI intent.
-        setAnchorMilestone(aiMilestone);
-        setAnchorHours(safeResolutionHours);
-        if (isLLMRecommendation(suggestionResult.contract)) {
-          const rec = suggestionResult.contract.questionTypeRecommendation;
-          setQuestionType(rec === "likes" ? "likes" : "views");
+        if ("error" in suggestionResult) {
+          setError(suggestionResult.error ?? "Unknown error");
+          return;
         }
-      }
+        setSuggestion(suggestionResult);
 
-      if (suggestionResult.suggestedTitle) {
-        setTitleValue(suggestionResult.suggestedTitle);
+        if (suggestionResult.contract) {
+          const aiMilestone = suggestionResult.contract.milestoneThreshold;
+          const clampedMilestone = computeMilestoneFloor(aiMilestone, statsResult.viewCount);
+          const safeResolutionHours = suggestionResult.contract.resolutionHours;
+          setMilestoneThreshold(String(clampedMilestone));
+          setBParameter(String(suggestionResult.contract.bParameter));
+          setResolutionHours(String(safeResolutionHours));
+          setRiskTier(suggestionResult.contract.riskTier);
+          // Anchor is the raw AI suggestion — used as reference for proportional scaling.
+          // The initial displayed value may be floor-clamped, but the anchor stays at AI intent.
+          setAnchorMilestone(aiMilestone);
+          setAnchorHours(safeResolutionHours);
+          if (isLLMRecommendation(suggestionResult.contract)) {
+            const rec = suggestionResult.contract.questionTypeRecommendation;
+            setQuestionType(rec === "likes" ? "likes" : "views");
+          }
+        }
+
+        if (suggestionResult.suggestedTitle) {
+          setTitleValue(suggestionResult.suggestedTitle);
+        }
       }
     } catch (err) {
       if (token.canceled) return;
@@ -281,7 +284,7 @@ export default function CreateMarketPage() {
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* Video URL */}
         <div>
-          <label className="block text-sm font-medium mb-1.5">YouTube Video URL</label>
+          <label className="block text-sm font-medium mb-1.5">Video URL (YouTube or TikTok)</label>
           <div className="flex gap-2">
             <input
               type="text"
@@ -293,7 +296,7 @@ export default function CreateMarketPage() {
                   handleFetchVideo();
                 }
               }}
-              placeholder="https://youtube.com/shorts/..."
+              placeholder="https://youtube.com/shorts/... or https://www.tiktok.com/@user/video/..."
               className="flex-1 px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-accent"
             />
             <button
@@ -364,6 +367,8 @@ export default function CreateMarketPage() {
         <input type="hidden" name="thumbnail" value={videoStats?.thumbnail ?? ""} />
         <input type="hidden" name="channelTitle" value={videoStats?.channelTitle ?? ""} />
         <input type="hidden" name="channelId" value={videoStats?.channelId ?? ""} />
+        <input type="hidden" name="creatorId" value={"creatorId" in (videoStats ?? {}) ? (videoStats as { creatorId?: string }).creatorId ?? "" : ""} />
+        <input type="hidden" name="tikapiPostId" value={"tikapiPostId" in (videoStats ?? {}) ? (videoStats as { tikapiPostId?: string }).tikapiPostId ?? "" : ""} />
         <input type="hidden" name="videoDescription" value={videoStats?.description ?? ""} />
         <input type="hidden" name="initialViewCount" value={videoStats?.viewCount ?? ""} />
         <input type="hidden" name="initialLikeCount" value={videoStats?.likeCount ?? ""} />

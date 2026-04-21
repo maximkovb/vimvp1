@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import {
   createChart,
   type IChartApi,
+  type ISeriesApi,
   type UTCTimestamp,
   ColorType,
   AreaSeries,
@@ -24,7 +25,9 @@ export function VideoStatsChart({
 }: VideoStatsChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
 
+  // Initialize chart once. Re-initialize only if milestone/metricLabel change (stable after creation).
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
@@ -46,6 +49,15 @@ export function VideoStatsChart({
         borderColor: "#2a2a3a",
         timeVisible: true,
       },
+      localization: {
+        timeFormatter: (time: UTCTimestamp) =>
+          new Date(time * 1000).toLocaleString(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+      },
     });
 
     const series = chart.addSeries(AreaSeries, {
@@ -59,11 +71,6 @@ export function VideoStatsChart({
       },
     });
 
-    if (data.length > 0) {
-      series.setData(data);
-      chart.timeScale().fitContent();
-    }
-
     series.createPriceLine({
       price: milestone,
       color: "#f59e0b",
@@ -74,6 +81,7 @@ export function VideoStatsChart({
     });
 
     chartRef.current = chart;
+    seriesRef.current = series;
 
     const observer = new ResizeObserver((entries) => {
       chart.applyOptions({ width: entries[0].contentRect.width });
@@ -83,8 +91,17 @@ export function VideoStatsChart({
     return () => {
       observer.disconnect();
       chart.remove();
+      chartRef.current = null;
+      seriesRef.current = null;
     };
-  }, [data, milestone, metricLabel]);
+  }, [milestone, metricLabel]);
+
+  // Update data without recreating the chart.
+  useEffect(() => {
+    if (!seriesRef.current || data.length === 0) return;
+    seriesRef.current.setData(data);
+    chartRef.current?.timeScale().fitContent();
+  }, [data]);
 
   return <div ref={chartContainerRef} />;
 }

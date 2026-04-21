@@ -8,13 +8,16 @@ export interface MarketData {
   questionType: QuestionType;
   /** BigInt serialized as string to survive JSON round-trip */
   milestoneThreshold: string;
-  youtubeVideoId: string;
+  videoId: string;
+  platform: "youtube" | "tiktok" | "instagram";
+  tikapiPostId?: string | null;
   videoMetadata: {
     title: string;
     thumbnail: string;
     channelTitle: string;
     channelId?: string;
     description?: string;
+    creatorId?: string;
   } | null;
   priceYes: number;
   priceNo: number;

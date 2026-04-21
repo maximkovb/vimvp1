@@ -1,7 +1,7 @@
 import "server-only";
 
 import { db } from "@/db";
-import { markets, youtubePolls } from "@/db/schema";
+import { markets, youtubePolls, tiktokPolls } from "@/db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { distributePayout } from "@/lib/services/payout";
 import { YOUTUBE_API_BASE, YT_TIMEOUT_MS } from "@/lib/constants";
@@ -70,12 +70,26 @@ export async function resolveMarket(marketId: string): Promise<void> {
 
   if (!market) throw new Error(`Market ${marketId} not found`);
 
-  const [latestPoll] = await db
-    .select()
-    .from(youtubePolls)
-    .where(eq(youtubePolls.marketId, marketId))
-    .orderBy(desc(youtubePolls.polledAt))
-    .limit(1);
+  // Platform-aware poll lookup
+  let latestPoll: { viewCount: bigint | null; likeCount: bigint | null } | undefined;
+
+  if (market.platform === "tiktok") {
+    const [poll] = await db
+      .select()
+      .from(tiktokPolls)
+      .where(eq(tiktokPolls.marketId, marketId))
+      .orderBy(desc(tiktokPolls.polledAt))
+      .limit(1);
+    latestPoll = poll;
+  } else {
+    const [poll] = await db
+      .select()
+      .from(youtubePolls)
+      .where(eq(youtubePolls.marketId, marketId))
+      .orderBy(desc(youtubePolls.polledAt))
+      .limit(1);
+    latestPoll = poll;
+  }
 
   if (!latestPoll) throw new Error(`No poll data for market ${marketId}`);
 

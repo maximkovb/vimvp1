@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { markets, youtubePolls } from "@/db/schema";
-import { or, eq, sql } from "drizzle-orm";
+import { or, eq, and, sql } from "drizzle-orm";
 import { verifyCronAuth } from "@/lib/cron-auth";
 
 import { YOUTUBE_API_BASE } from "@/lib/constants";
@@ -43,12 +43,15 @@ export async function GET(request: Request) {
     );
   }
 
-  // Fetch active and halted markets
+  // Fetch active and halted YouTube markets only
   const activeMarkets = await db
     .select()
     .from(markets)
     .where(
-      or(eq(markets.status, "active"), eq(markets.status, "halted"))
+      and(
+        eq(markets.platform, "youtube"),
+        or(eq(markets.status, "active"), eq(markets.status, "halted"))
+      )
     );
 
   if (activeMarkets.length === 0) {
@@ -76,7 +79,7 @@ export async function GET(request: Request) {
   }
 
   // Batch YouTube API calls (max 50 IDs per request)
-  const videoIds = [...new Set(marketsToPoll.map((m) => m.youtubeVideoId))];
+  const videoIds = [...new Set(marketsToPoll.map((m) => m.videoId))];
   const batches: string[][] = [];
   for (let i = 0; i < videoIds.length; i += 50) {
     batches.push(videoIds.slice(i, i + 50));
@@ -117,7 +120,7 @@ export async function GET(request: Request) {
   // Store poll results
   const pollRecords = marketsToPoll
     .map((market) => {
-      const stats = videoStats.get(market.youtubeVideoId);
+      const stats = videoStats.get(market.videoId);
       if (!stats) return null;
 
       const isDeleted = stats.viewCount === BigInt(-1);

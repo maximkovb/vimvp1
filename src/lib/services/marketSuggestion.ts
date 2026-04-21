@@ -108,7 +108,7 @@ export async function computeMarketSuggestion(
     .from(markets)
     .where(
       and(
-        eq(markets.youtubeVideoId, videoId),
+        eq(markets.videoId, videoId),
         or(eq(markets.status, "active"), eq(markets.status, "draft"))
       )
     )

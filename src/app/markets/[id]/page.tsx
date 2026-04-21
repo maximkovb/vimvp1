@@ -1,5 +1,5 @@
 import { db } from "@/db";
-import { markets, trades, priceSnapshots, youtubePolls } from "@/db/schema";
+import { markets, trades, priceSnapshots, youtubePolls, tiktokPolls } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
@@ -7,6 +7,7 @@ import { allPrices } from "@/lib/lmsr";
 import { MarketLiveData } from "@/components/MarketLiveData";
 import { VideoDescription } from "@/components/VideoDescription";
 import { ChannelHistorySection } from "@/components/ChannelHistorySection";
+import { TikTokEmbed } from "@/components/TikTokEmbed";
 import type { MarketData } from "@/types/market";
 import { Suspense } from "react";
 
@@ -46,12 +47,19 @@ export default async function MarketPage({
       .where(eq(priceSnapshots.marketId, id))
       .orderBy(priceSnapshots.recordedAt)
       .limit(500),
-    db
-      .select()
-      .from(youtubePolls)
-      .where(eq(youtubePolls.marketId, id))
-      .orderBy(youtubePolls.polledAt)
-      .limit(500),
+    market.platform === "tiktok"
+      ? db
+          .select()
+          .from(tiktokPolls)
+          .where(eq(tiktokPolls.marketId, id))
+          .orderBy(tiktokPolls.polledAt)
+          .limit(500)
+      : db
+          .select()
+          .from(youtubePolls)
+          .where(eq(youtubePolls.marketId, id))
+          .orderBy(youtubePolls.polledAt)
+          .limit(500),
   ]);
 
   const initialData: MarketData = {
@@ -61,7 +69,9 @@ export default async function MarketPage({
     status: market.status,
     questionType: market.questionType,
     milestoneThreshold: market.milestoneThreshold.toString(),
-    youtubeVideoId: market.youtubeVideoId,
+    videoId: market.videoId,
+    platform: market.platform,
+    tikapiPostId: market.tikapiPostId,
     videoMetadata: market.videoMetadata ?? null,
     priceYes,
     priceNo,
@@ -94,16 +104,24 @@ export default async function MarketPage({
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
-      {/* Static: YouTube embed */}
-      <div className="aspect-video bg-card rounded-xl overflow-hidden border border-border mb-6">
-        <iframe
-          src={`https://www.youtube.com/embed/${market.youtubeVideoId}`}
-          title={videoMetadata?.title || market.title}
-          className="w-full h-full"
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-          allowFullScreen
-        />
-      </div>
+      {/* Static: video embed */}
+      {market.platform === "tiktok" ? (
+        <div className="flex justify-center mb-6">
+          <div className="w-[325px]">
+            <TikTokEmbed videoId={market.videoId} title={videoMetadata?.title || market.title} />
+          </div>
+        </div>
+      ) : (
+        <div className="aspect-video bg-card rounded-xl overflow-hidden border border-border mb-6">
+          <iframe
+            src={`https://www.youtube.com/embed/${market.videoId}`}
+            title={videoMetadata?.title || market.title}
+            className="w-full h-full"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowFullScreen
+          />
+        </div>
+      )}
 
       {/* Static: description */}
       {videoMetadata?.description && (
@@ -117,7 +135,7 @@ export default async function MarketPage({
 
       {/* Dynamic: everything else, with server-rendered channel history as children */}
       <MarketLiveData marketId={id} session={session} initialData={initialData}>
-        {videoMetadata?.channelId && (
+        {market.platform !== "tiktok" && videoMetadata?.channelId && (
           <Suspense
             fallback={
               <div className="bg-card border border-border rounded-xl p-4">

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { createChart, type IChartApi, type UTCTimestamp, ColorType, AreaSeries } from "lightweight-charts";
+import { createChart, type IChartApi, type ISeriesApi, type UTCTimestamp, ColorType, AreaSeries } from "lightweight-charts";
 
 interface PriceChartProps {
   data: { time: UTCTimestamp; value: number }[];
@@ -10,9 +10,11 @@ interface PriceChartProps {
 export function PriceChart({ data }: PriceChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
 
+  // Initialize chart once on mount.
   useEffect(() => {
-    if (!chartContainerRef.current || data.length === 0) return;
+    if (!chartContainerRef.current) return;
 
     const chart = createChart(chartContainerRef.current, {
       layout: {
@@ -32,6 +34,15 @@ export function PriceChart({ data }: PriceChartProps) {
         borderColor: "#2a2a3a",
         timeVisible: true,
       },
+      localization: {
+        timeFormatter: (time: UTCTimestamp) =>
+          new Date(time * 1000).toLocaleString(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+      },
     });
 
     const series = chart.addSeries(AreaSeries, {
@@ -45,15 +56,12 @@ export function PriceChart({ data }: PriceChartProps) {
       },
     });
 
-    series.setData(data);
-    chart.timeScale().fitContent();
     chartRef.current = chart;
+    seriesRef.current = series;
 
     const handleResize = () => {
       if (chartContainerRef.current) {
-        chart.applyOptions({
-          width: chartContainerRef.current.clientWidth,
-        });
+        chart.applyOptions({ width: chartContainerRef.current.clientWidth });
       }
     };
 
@@ -62,7 +70,16 @@ export function PriceChart({ data }: PriceChartProps) {
     return () => {
       window.removeEventListener("resize", handleResize);
       chart.remove();
+      chartRef.current = null;
+      seriesRef.current = null;
     };
+  }, []);
+
+  // Update data without recreating the chart.
+  useEffect(() => {
+    if (!seriesRef.current || data.length === 0) return;
+    seriesRef.current.setData(data);
+    chartRef.current?.timeScale().fitContent();
   }, [data]);
 
   return <div ref={chartContainerRef} />;
