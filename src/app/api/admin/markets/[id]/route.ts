@@ -8,6 +8,7 @@ import {
 } from "@/db/schema";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { verifyCronAuth } from "@/lib/cron-auth";
+import { applyAdminRateLimit } from "@/lib/rate-limit";
 import { requireAdminLifecycleEnabled } from "@/lib/admin-lifecycle-gate";
 import { refundPositions } from "@/lib/services/payout";
 
@@ -43,6 +44,9 @@ export async function DELETE(
 ) {
   const authError = verifyCronAuth(request);
   if (authError) return authError;
+
+  const rateLimited = applyAdminRateLimit(request, { limit: 10, windowMs: 60_000 });
+  if (rateLimited) return rateLimited;
 
   const gateError = requireAdminLifecycleEnabled();
   if (gateError) return gateError;

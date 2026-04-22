@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { markets } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { verifyCronAuth } from "@/lib/cron-auth";
+import { applyAdminRateLimit } from "@/lib/rate-limit";
 
 /**
  * PATCH /api/admin/markets/[id]/publish
@@ -22,6 +23,9 @@ export async function PATCH(
 ) {
   const authError = verifyCronAuth(request);
   if (authError) return authError;
+
+  const rateLimited = applyAdminRateLimit(request, { limit: 30, windowMs: 60_000 });
+  if (rateLimited) return rateLimited;
 
   const { id } = await params;
 

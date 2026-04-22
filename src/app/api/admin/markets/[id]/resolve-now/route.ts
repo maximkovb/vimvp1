@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { markets } from "@/db/schema";
 import { and, eq, notInArray } from "drizzle-orm";
 import { verifyCronAuth } from "@/lib/cron-auth";
+import { applyAdminRateLimit } from "@/lib/rate-limit";
 import { requireAdminLifecycleEnabled } from "@/lib/admin-lifecycle-gate";
 import { resolveMarket } from "@/lib/oracle";
 
@@ -45,6 +46,9 @@ export async function POST(
 ) {
   const authError = verifyCronAuth(request);
   if (authError) return authError;
+
+  const rateLimited = applyAdminRateLimit(request, { limit: 10, windowMs: 60_000 });
+  if (rateLimited) return rateLimited;
 
   const gateError = requireAdminLifecycleEnabled();
   if (gateError) return gateError;
