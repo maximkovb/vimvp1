@@ -1,0 +1,62 @@
+{
+  "reviewer": "reliability",
+  "findings": [
+    {
+      "severity": "P1",
+      "title": "checkStaleness fetch has no timeout — hangs indefinitely on slow /api/markets",
+      "file": "src/components/TradePanel.tsx",
+      "line_hint": 121,
+      "description": "The fetch call inside checkStaleness uses cache: 'no-store' but no AbortSignal or timeout. If the /api/markets/${marketId} endpoint is slow or stalled, the entire handleBuy async path hangs indefinitely. Because the Buy button is not disabled during checkStaleness (isPending is only set later inside startTransition/executeBuy), repeated clicks queue multiple concurrent hanging requests. Other fetch calls in this codebase (src/lib/tiktok.ts lines 21 and 89) correctly use AbortSignal.timeout(8_000); this call does not.",
+      "autofix_class": "safe_auto",
+      "suggested_fix": "Add a timeout signal to the fetch: fetch(`/api/markets/${marketId}`, { cache: 'no-store', signal: AbortSignal.timeout(8_000) }). The existing catch block already handles the thrown AbortError correctly by setting the error message and returning false.",
+      "requires_verification": false,
+      "confidence": "high",
+      "pre_existing": false
+    },
+    {
+      "severity": "P1",
+      "title": "Buy button not disabled during checkStaleness — allows duplicate trade submissions",
+      "file": "src/components/TradePanel.tsx",
+      "line_hint": 319,
+      "description": "The Buy button's disabled prop checks isPending (from useTransition), but isPending is only set to true once startTransition fires inside executeBuy, which runs after checkStaleness resolves. During the entire checkStaleness network round-trip the button remains enabled. Repeated clicks each launch an independent checkStaleness + executeBuy sequence. The server's optimistic-lock retry loop mitigates duplicate DB writes, but duplicate submissions still cause redundant server action invocations and can result in multiple successful trades if the first completes before the second's staleness check fires.",
+      "autofix_class": "safe_auto",
+      "suggested_fix": "Add a local isChecking state: const [isChecking, setIsChecking] = useState(false). Set it true at the start of handleBuy and false in a finally block. Add isChecking to the button's disabled condition and to inputDisabled. This closes the window between click and the transition start.",
+      "requires_verification": false,
+      "confidence": "high",
+      "pre_existing": false
+    },
+    {
+      "severity": "P1",
+      "title": "buyShares server action DB throws are unhandled in executeBuy — crashes error boundary instead of setting error state",
+      "file": "src/components/TradePanel.tsx",
+      "line_hint": 146,
+      "description": "executeBuy awaits buyShares(marketId, outcome, amount) without a try/catch (lines 144-163). The server action explicitly re-throws non-ConcurrentTradeError exceptions (trade.ts line 245), which includes DB connection failures, schema errors, and unexpected runtime errors. When buyShares throws instead of returning { error: string }, the error propagates out of the startTransition async callback as an unhandled promise rejection, crashing the nearest React error boundary rather than displaying the error inline via setError. The user sees a broken UI instead of a recoverable error message.",
+      "autofix_class": "safe_auto",
+      "suggested_fix": "Wrap the await buyShares call in a try/catch inside executeBuy: try { const result = await buyShares(...); if ('error' in result) { setError(result.error); setStaleConfirm(null); return; } ... } catch { setError('Trade failed. Please try again.'); setStaleConfirm(null); }",
+      "requires_verification": false,
+      "confidence": "high",
+      "pre_existing": false
+    },
+    {
+      "severity": "P3",
+      "title": "401 on /api/balance silently enables trade UI with a fabricated 500-coin balance",
+      "file": "src/components/TradePanel.tsx",
+      "line_hint": 62,
+      "description": "When the /api/balance endpoint returns 401 (unauthenticated), balanceFetcher throws, SWR sets balanceFetchError, and the component falls through to balance = userBalance ?? 500. isBalanceLoading becomes false, the slider and input become enabled, and the UI presents a fully interactive trade panel with a fake maximum of 500 coins. The server will correctly reject the trade, but the user can interact with and submit a trade before seeing any authentication error. The server error message 'Not authenticated' surfaces via setError only after a round-trip. An explicit auth-failure check on balanceFetchError would present the right state immediately.",
+      "autofix_class": "advisory",
+      "suggested_fix": "Check balanceFetchError for authentication failure: if (balanceFetchError?.message === 'Failed to fetch balance') inspect the status code, or propagate the HTTP status through the fetcher. When a 401 is detected, render a 'Sign in to trade' prompt and keep inputDisabled true rather than falling back to 500.",
+      "requires_verification": true,
+      "confidence": "high",
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "The ConcurrentTradeError retry loop in buyShares (trade.ts lines 101-247) retries up to 3 times with no delay between attempts. Under a sustained write-heavy load, three back-to-back transaction retries could amplify DB contention. No immediate fix is required as the loop is bounded at 3 attempts, but adding even a small jitter delay (e.g., 50-150ms randomised) between retries would reduce contention under burst load.",
+    "balanceFetcher has no timeout; a slow /api/balance response holds isBalanceLoading=true indefinitely, keeping the entire trade panel disabled for the user. SWR has no default request timeout. Consider adding AbortSignal.timeout to the fetcher, matching the pattern used in tiktok.ts."
+  ],
+  "testing_gaps": [
+    "No test covers the window between handleBuy click and executeBuy's startTransition — a test that clicks Buy twice in rapid succession and asserts only one trade is submitted would catch the duplicate-submission gap.",
+    "No test simulates a slow or hung /api/markets response to verify the panel remains responsive and times out correctly.",
+    "No test covers buyShares throwing (as opposed to returning { error: string }) to verify the component surfaces the error gracefully rather than crashing."
+  ]
+}

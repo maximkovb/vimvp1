@@ -1,0 +1,63 @@
+{
+  "reviewer": "kieran-typescript",
+  "findings": [
+    {
+      "severity": "P2",
+      "title": "res.json() in balanceFetcher returns any — BalanceData type annotation is not enforced at runtime",
+      "file": "src/lib/balance-fetcher.ts",
+      "line_hint": 15,
+      "description": "res.json() returns Promise<any>. The function's declared return type Promise<BalanceData> satisfies the TypeScript checker structurally but provides no runtime enforcement. If the API returns a malformed response (e.g., balance as null, a string, or missing entirely), the caller receives a value that does not match BalanceData but TypeScript reports no error. This is the upstream cause of the NaN-sliderMax risk in TradePanel. A runtime validator (zod.parse or a manual shape check) is needed at this boundary.",
+      "autofix_class": "manual",
+      "suggested_fix": "Parse with zod at the boundary:\n  import { z } from 'zod';\n  const BalanceDataSchema = z.object({ balance: z.number(), loginStreak: z.number(), lastLoginReward: z.string().nullable() });\n  export async function balanceFetcher(url: string): Promise<BalanceData> {\n    const res = await fetch(url);\n    if (!res.ok) throw new Error('Failed to fetch balance');\n    return BalanceDataSchema.parse(await res.json());\n  }",
+      "requires_verification": false,
+      "confidence": 0.82,
+      "pre_existing": true
+    },
+    {
+      "severity": "P2",
+      "title": "commitInput does not guard against NaN sliderMax — setAmount(NaN) can propagate silently",
+      "file": "src/components/TradePanel.tsx",
+      "line_hint": 82,
+      "description": "commitInput guards the user-typed value with isNaN(parsed) ? 1 : parsed (line 81), but it does not guard sliderMax. sliderMax = balance, and balance derives from balanceData?.balance which is unvalidated (see balance-fetcher finding). If balanceData.balance is NaN or non-numeric, sliderMax is NaN. Math.min(Math.max(valid, 1), NaN) returns NaN. The comparison clamped < valid is false for NaN so flashBalanceError never fires. setAmount(NaN) is called, and NaN propagates into sharesForCost, priceImpact, and the buy-button label. The fix at the fetcher boundary (runtime validation) is the preferred solution, but a local guard here also helps defensively.",
+      "autofix_class": "manual",
+      "suggested_fix": "Add a NaN guard before clamping:\n  const safeMax = Number.isFinite(sliderMax) && sliderMax >= 1 ? sliderMax : 1;\n  const clamped = Math.min(Math.max(valid, 1), safeMax);",
+      "requires_verification": true,
+      "confidence": 0.75,
+      "pre_existing": true
+    },
+    {
+      "severity": "P2",
+      "title": "checkStaleness accesses fresh.* fields on implicit any — no type coverage for market API response",
+      "file": "src/components/TradePanel.tsx",
+      "line_hint": 123,
+      "description": "const fresh = await res.json() on line 123 infers as any. Subsequent accesses — fresh.priceYes, fresh.priceNo, fresh.quantityYes, fresh.quantityNo, fresh.bParameter — are all untyped. TypeScript cannot catch a field rename or API shape change here. The staleness check could silently pass (outcomeDelta = NaN, NaN > 0.02 is false) or silently pass wrong data to sharesForCost if the API response structure changes.",
+      "autofix_class": "manual",
+      "suggested_fix": "Define and apply a type for the market response at this call site, either via a shared interface or an inline zod schema:\n  interface FreshMarket { priceYes: number; priceNo: number; quantityYes: number; quantityNo: number; bParameter: number; }\n  const fresh = await res.json() as FreshMarket; // minimum: cast to known interface\n  // Better: validate with zod before trusting the values.",
+      "requires_verification": false,
+      "confidence": 0.85,
+      "pre_existing": true
+    },
+    {
+      "severity": "P3",
+      "title": "trackRef.current! non-null assertion in valueFromPointer — logically safe but suppresses the null checker",
+      "file": "src/components/CoinSlider.tsx",
+      "line_hint": 32,
+      "description": "trackRef.current! is used inside valueFromPointer, which is only called from handlePointerDown and handlePointerMove. Both handlers are attached to the same <div> that holds the ref, so the element cannot be unmounted while actively dispatching to itself — the assertion is safe in practice. However, it permanently silences the null checker for this access. If valueFromPointer were ever called from a different context (e.g., a keyboard handler or an effect) the assertion would be wrong and would produce a runtime crash rather than a compile-time error. A type guard is more future-proof.",
+      "autofix_class": "mechanical",
+      "suggested_fix": "Replace the assertion with a guard:\n  function valueFromPointer(clientX: number): number {\n    if (!trackRef.current) return value; // or return min; safe no-op\n    const rect = trackRef.current.getBoundingClientRect();\n    ...\n  }",
+      "requires_verification": false,
+      "confidence": 0.65,
+      "pre_existing": true
+    }
+  ],
+  "residual_risks": [
+    "lastLoginReward: string | null in BalanceData is plausible but unverified at runtime — if the API changes this field (e.g., to a Date string or drops it), consumers will receive undefined with no TypeScript error due to the unvalidated res.json() cast.",
+    "The userBalance?: number optional prop with nullish coalescing is safe for the 0-balance edge case (0 ?? 500 = 0, correct). However, when sliderMax=0 the slider renders with min=1 and max=0, which means CoinSlider passes an inverted range to Math.round(ratio * max) — the slider ball will always render at ballPct=0 and snap points will all resolve to 0 via Math.max(1, Math.round(pct*0))=1. This is a UX edge case rather than a type error, but it is worth verifying with a zero-balance test user.",
+    "ReturnType<typeof setTimeout> on line 54 of TradePanel.tsx is correct and idiomatic for a use-client component — no issue. When @types/node is installed, this resolves to NodeJS.Timeout, and clearTimeout accepts that type without complaint."
+  ],
+  "testing_gaps": [
+    "No test covers the path where /api/balance returns a non-numeric or missing balance field — the NaN propagation through commitInput and the LMSR calculations would only surface in production.",
+    "No test covers checkStaleness with a malformed /api/markets/:id response — the any-typed fresh object means a field rename would pass all static checks and only fail at runtime.",
+    "The sliderMax=0 scenario (user with 0 balance) has no visible test coverage — CoinSlider behavior with min > max is untested."
+  ]
+}

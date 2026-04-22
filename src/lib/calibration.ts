@@ -14,8 +14,9 @@
 /**
  * Fraction of total view accumulation expected by each resolution window horizon.
  *
- * Approximation: YouTube Shorts typically accumulate ~55% of total views in the first 24h,
- * ~80% by 48h, and reach ~100% by 72h. Adjust these ratios empirically after deploy.
+ * Approximation: TikTok videos typically accumulate ~55% of total views in the first 24h,
+ * ~80% by 48h, and reach ~100% by 72h.
+ * TODO: Re-tune these ratios empirically once the platform has enough resolved TikTok markets.
  *
  * These are exported so the LLM system prompt (prediction.ts) stays in sync with the
  * algorithmic path. Change here → both paths update automatically.

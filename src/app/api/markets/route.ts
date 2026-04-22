@@ -1,47 +1,56 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
-import { markets, priceSnapshots } from "@/db/schema";
+import { markets, priceSnapshots, tiktokPolls } from "@/db/schema";
 import { desc, eq, or } from "drizzle-orm";
 import { getMarketPrices } from "@/lib/market-utils";
 import { allPrices } from "@/lib/lmsr";
 import { verifyCronAuth } from "@/lib/cron-auth";
 import { computeExpectedOutcome, RESOLUTION_HOURS } from "@/lib/calibration";
+import { TIKTOK_VIDEO_ID_RE } from "@/lib/constants";
 import { z } from "zod";
 
-const CreateMarketSchema = z.object({
-  videoId: z.string().min(1).max(50),
-  platform: z.enum(["youtube", "tiktok", "instagram"]).default("youtube"),
-  title: z.string().min(1).max(200),
-  description: z.string().max(500).optional(),
-  questionType: z.enum(["views", "likes"]),
-  milestoneThreshold: z.number().int().min(1).max(10_000_000_000),
-  bParameter: z.number().min(1).max(1000),
-  resolutionHours: z.union(
-    RESOLUTION_HOURS.map((h) => z.literal(h)) as [z.ZodLiteral<24>, z.ZodLiteral<48>, z.ZodLiteral<72>]
-  ),
-  publishImmediately: z.boolean().default(false),
-  // Optional calibration fields — used to enforce the channel-baseline floor guard.
-  // Omitting them degrades to velocity-only floor (same as when channel data is unavailable).
-  initialViewCount: z.number().int().min(0).optional(),
-  channelAvgViews: z.number().int().min(0).optional(),
-  // publishedAt is the preferred way to supply video age — the server re-derives videoAgeHours
-  // from it at request time, preventing callers from submitting a stale age.
-  // videoAgeHours is accepted as a fallback when publishedAt is absent.
-  publishedAt: z.string().datetime().optional(),
-  videoAgeHours: z.number().min(0.1).optional(),
-  videoMetadata: z.object({
-    title: z.string(),
-    thumbnail: z.string()
-      .regex(/^https:\/\/i\.ytimg\.com\//)
-      .or(z.string().regex(/^https:\/\/[a-z0-9-]+\.tiktokcdn\.com\//))
-      .or(z.literal(""))
-      .default(""),
-    channelTitle: z.string(),
-    channelId: z.string().optional(),
-    description: z.string().max(5000).optional(),
-    creatorId: z.string().optional(),
-  }),
-});
+const CreateMarketSchema = z
+  .object({
+    videoId: z.string().min(1).max(50),
+    title: z.string().min(1).max(200),
+    description: z.string().max(500).optional(),
+    questionType: z.enum(["views", "likes"]),
+    milestoneThreshold: z.number().int().min(1).max(10_000_000_000),
+    bParameter: z.number().min(1).max(1000),
+    resolutionHours: z.union(
+      RESOLUTION_HOURS.map((h) => z.literal(h)) as [z.ZodLiteral<24>, z.ZodLiteral<48>, z.ZodLiteral<72>]
+    ),
+    publishImmediately: z.boolean().default(false),
+    // Optional calibration fields — used to enforce the channel-baseline floor guard.
+    // Omitting them degrades to velocity-only floor (same as when channel data is unavailable).
+    initialViewCount: z.number().int().min(0).optional(),
+    initialLikeCount: z.number().int().min(0).optional(),
+    channelAvgViews: z.number().int().min(0).optional(),
+    // publishedAt is the preferred way to supply video age — the server re-derives videoAgeHours
+    // from it at request time, preventing callers from submitting a stale age.
+    // videoAgeHours is accepted as a fallback when publishedAt is absent.
+    publishedAt: z.string().datetime().optional(),
+    videoAgeHours: z.number().min(0.1).optional(),
+    videoMetadata: z.object({
+      title: z.string(),
+      thumbnail: z.string()
+        .regex(/^https:\/\/[a-z0-9-]+\.tiktokcdn(?:-us)?\.com\//)
+        .or(z.literal(""))
+        .default(""),
+      channelTitle: z.string(),
+      description: z.string().max(5000).optional(),
+      creatorId: z.string().optional(),
+    }),
+  })
+  .superRefine((data, ctx) => {
+    if (!TIKTOK_VIDEO_ID_RE.test(data.videoId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Invalid TikTok video ID format (expected 15–20 digit numeric string)",
+        path: ["videoId"],
+      });
+    }
+  });
 
 // POST /api/markets — agent-accessible market creation (requires CRON_SECRET bearer token)
 export async function POST(request: Request) {
@@ -94,13 +103,11 @@ export async function POST(request: Request) {
   const haltsAt = new Date(resolvesAt.getTime() - 5 * 60 * 1000);
   const marketId = crypto.randomUUID();
 
-  // Atomic: market row + initial price snapshot in a single transaction.
-  // Without this, a crash between the two inserts leaves an orphaned market with no pricing.
+  // Atomic: market row + initial price snapshot + initial poll row in a single transaction.
   await db.transaction(async (tx) => {
     await tx.insert(markets).values({
       id: marketId,
       videoId: data.videoId,
-      platform: data.platform,
       title: data.title,
       description: data.description ?? null,
       questionType: data.questionType,
@@ -120,6 +127,13 @@ export async function POST(request: Request) {
         marketId,
         priceYes: prices[0].toFixed(6),
         priceNo: prices[1].toFixed(6),
+      });
+
+      // Insert initial poll row so oracle has baseline data without waiting for first cron cycle.
+      await tx.insert(tiktokPolls).values({
+        marketId,
+        viewCount: data.initialViewCount !== undefined ? BigInt(data.initialViewCount) : null,
+        likeCount: data.initialLikeCount !== undefined ? BigInt(data.initialLikeCount) : null,
       });
     }
   });

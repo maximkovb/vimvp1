@@ -1,10 +1,11 @@
 "use server";
 
 import { db } from "@/db";
-import { users, coinTransactions } from "@/db/schema";
-import { eq, sql } from "drizzle-orm";
+import { users, coinTransactions, markets } from "@/db/schema";
+import { eq, sql, desc } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
+import type { CoinTransactionType } from "@/db/schema";
 
 const BASE_DAILY_REWARD = 50;
 const STREAK_BONUS_PER_DAY = 10;
@@ -97,4 +98,69 @@ export async function claimDailyReward(): Promise<ClaimResult> {
   }
 
   return result;
+}
+
+export type RecentActivityResult =
+  | {
+      transactions: Array<{
+        id: string;
+        amount: number;
+        type: CoinTransactionType;
+        marketTitle: string | null;
+        createdAt: Date;
+      }>;
+      loginStreak: number;
+      lastLoginReward: Date | null;
+    }
+  | { error: string };
+
+export async function getRecentActivity(): Promise<RecentActivityResult> {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return { error: "Not authenticated" };
+  }
+
+  const userId = session.user.id;
+
+  try {
+    const [user] = await db
+      .select({
+        loginStreak: users.loginStreak,
+        lastLoginReward: users.lastLoginReward,
+      })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+
+    if (!user) return { error: "User not found" };
+
+    const recentTransactions = await db
+      .select({
+        id: coinTransactions.id,
+        amount: coinTransactions.amount,
+        type: coinTransactions.type,
+        referenceId: coinTransactions.referenceId,
+        createdAt: coinTransactions.createdAt,
+        marketTitle: markets.title,
+      })
+      .from(coinTransactions)
+      .leftJoin(markets, eq(coinTransactions.referenceId, markets.id))
+      .where(eq(coinTransactions.userId, userId))
+      .orderBy(desc(coinTransactions.createdAt))
+      .limit(5);
+
+    return {
+      transactions: recentTransactions.map((t) => ({
+        id: t.id,
+        amount: parseFloat(t.amount),
+        type: t.type,
+        marketTitle: t.marketTitle ?? null,
+        createdAt: t.createdAt,
+      })),
+      loginStreak: user.loginStreak,
+      lastLoginReward: user.lastLoginReward,
+    };
+  } catch {
+    return { error: "Failed to load activity" };
+  }
 }

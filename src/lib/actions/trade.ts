@@ -1,5 +1,11 @@
 "use server";
 
+export type UserPosition = {
+  outcome: number;
+  shares: number;
+  avgCostBasis: number;
+};
+
 class ConcurrentTradeError extends Error {
   constructor() {
     super("Concurrent trade detected, please retry");
@@ -86,7 +92,9 @@ export async function buyShares(
 ): Promise<{ success: true; shares: number; cost: number } | { error: string }> {
   const session = await auth();
   if (!session?.user?.id) return { error: "Not authenticated" };
+  if (!Number.isFinite(amount) || !Number.isInteger(amount)) return { error: "Amount must be a whole number" };
   if (amount < 1) return { error: "Minimum trade is 1 coin" };
+  if (amount > 1_000_000) return { error: "Amount exceeds maximum trade size" };
   if (outcome !== 0 && outcome !== 1) return { error: "Invalid outcome" };
 
   const userId = session.user.id;
@@ -345,7 +353,7 @@ export async function sellShares(
 
         // Update position
         const remainingShares = currentShares - sharesToSell;
-        if (remainingShares <= 0.000001) {
+        if (remainingShares <= 0.01) {
           await tx
             .update(positions)
             .set({ shares: "0" })
@@ -384,4 +392,36 @@ export async function sellShares(
     }
   }
   return { error: "Price changed during trade, please try again" };
+}
+
+/**
+ * Fetch the authenticated user's position for a given market.
+ * Returns null for unauthenticated users or users with no position.
+ * Intended for the resolution reveal panel — does not expose other users' data.
+ */
+export async function getUserPosition(
+  marketId: string
+): Promise<UserPosition | null> {
+  const session = await auth();
+  if (!session?.user?.id) return null;
+
+  const userId = session.user.id;
+
+  // Fetch all outcomes for this user+market
+  const rows = await db
+    .select()
+    .from(positions)
+    .where(and(eq(positions.userId, userId), eq(positions.marketId, marketId)));
+
+  if (rows.length === 0) return null;
+
+  // Return the position with positive shares (the user's active side)
+  const active = rows.find((r) => parseFloat(r.shares) > 0.000001);
+  if (!active) return null;
+
+  return {
+    outcome: active.outcome,
+    shares: parseFloat(active.shares),
+    avgCostBasis: parseFloat(active.avgCostBasis),
+  };
 }

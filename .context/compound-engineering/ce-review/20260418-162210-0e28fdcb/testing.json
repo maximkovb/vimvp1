@@ -1,0 +1,98 @@
+[
+  {
+    "severity": "P0",
+    "title": "No tests exist for CoinSlider",
+    "file": "src/components/CoinSlider.tsx",
+    "line_hint": 1,
+    "description": "CoinSlider is entirely untested. Five behavioral branches have no coverage: handlePointerDown (line 37) fires onChange only when not disabled; handlePointerMove (line 44) fires only when isDragging.current is true and not disabled; handlePointerUp (line 49) resets isDragging; handleSnapClick (line 53) calls onChange at Math.max(min, Math.round(pct*max)) and early-returns when disabled; valueFromPointer (line 31) clamps ratio to [0,1] and maps to [min,max]. Regressions in the disabled guard, clamping arithmetic, or isDragging state tracking would be invisible.",
+    "autofix_class": "test_addition",
+    "suggested_fix": "Add src/components/CoinSlider.test.tsx with jsdom environment. Cases: snap button click calls onChange with correct clamped value; snap click is no-op when disabled=true; pointerdown on track calls onChange; pointermove without prior pointerdown does not call onChange; valueFromPointer returns min when dragged to left edge.",
+    "requires_verification": false,
+    "confidence": 0.98,
+    "pre_existing": false
+  },
+  {
+    "severity": "P0",
+    "title": "No tests exist for TradePanel",
+    "file": "src/components/TradePanel.tsx",
+    "line_hint": 1,
+    "description": "TradePanel has no test file. New behavioral branches: commitInput (lines 79-89) maps NaN input to 1, clamps over-balance and calls flashBalanceError, sets amount for valid values; flashBalanceError (lines 73-77) sets balanceError and schedules 1500ms auto-clear; cleanup useEffect (lines 67-71) clears timer on unmount; checkStaleness (lines 119-142) has fetch-failure, price-moved, and within-threshold branches.",
+    "autofix_class": "test_addition",
+    "suggested_fix": "Add src/components/TradePanel.test.tsx. commitInput: blur empty->amount=1; blur abc->amount=1; blur 200 with balance=100->amount=100 and balanceError set. Flash: vi.useFakeTimers(), trigger over-balance, advance 1500ms, assert error cleared. Unmount: trigger flash, unmount, advance clock, no setState-after-unmount error.",
+    "requires_verification": false,
+    "confidence": 0.97,
+    "pre_existing": false
+  },
+  {
+    "severity": "P1",
+    "title": "balanceFetcher !res.ok error branch has no test",
+    "file": "src/lib/balance-fetcher.ts",
+    "line_hint": 14,
+    "description": "balanceFetcher has two branches: res.ok path (return parsed JSON) and line 14 (!res.ok throws Error). The throw is the only guard preventing consumers from silently treating a 4xx/5xx body as valid BalanceData. No test file exists for this module. Existing tests cover lmsr, contract, and admin helpers only.",
+    "autofix_class": "test_addition",
+    "suggested_fix": "Add src/lib/__tests__/balance-fetcher.test.ts. vi.stubGlobal fetch. Case 1: ok=true with valid JSON -> resolved value matches BalanceData. Case 2: ok=false (401) -> rejects with Error message Failed to fetch balance. vitest environment:node is already correct.",
+    "requires_verification": false,
+    "confidence": 0.97,
+    "pre_existing": false
+  },
+  {
+    "severity": "P1",
+    "title": "balanceError 1500ms auto-clear and unmount cleanup have no test",
+    "file": "src/components/TradePanel.tsx",
+    "line_hint": 67,
+    "description": "flashBalanceError (line 73) schedules setTimeout 1500ms to clear balanceError. Cleanup useEffect (line 67) clears timer on unmount. Changing the delay or breaking clearTimeout would produce stale error messages or setState-after-unmount warnings with no test catching it.",
+    "autofix_class": "test_addition",
+    "suggested_fix": "vi.useFakeTimers(). After over-balance: assert balanceError set. Advance 1499ms->still set. Advance 1ms->cleared. Unmount test: trigger flash, unmount before 1500ms, advance clock, assert no React setState warning.",
+    "requires_verification": false,
+    "confidence": 0.95,
+    "pre_existing": false
+  },
+  {
+    "severity": "P2",
+    "title": "commitInput NaN fallback to 1 for empty/non-numeric input has no test",
+    "file": "src/components/TradePanel.tsx",
+    "line_hint": 80,
+    "description": "Line 81: const valid = isNaN(parsed) ? 1 : parsed. Blurring with empty string or abc causes parseInt to return NaN, resetting to 1. Prevents 0-coin trades. If the guard were removed or changed to 0, zero-coin trades would pass client-side validation silently.",
+    "autofix_class": "test_addition",
+    "suggested_fix": "fireEvent.change input to empty string then fireEvent.blur -> assert amount=1. Repeat with abc.",
+    "requires_verification": false,
+    "confidence": 0.95,
+    "pre_existing": false
+  },
+  {
+    "severity": "P2",
+    "title": "CoinSlider valueFromPointer clamping arithmetic has no test",
+    "file": "src/components/CoinSlider.tsx",
+    "line_hint": 31,
+    "description": "valueFromPointer (lines 31-35) clips pointer X to [0,1] relative to track getBoundingClientRect then maps to [min,max]. Math.max(min,...) on line 34 ensures leftmost drag returns min not 0. No test covers this arithmetic, which is easy to break by swapping min/max or reading the wrong rect property.",
+    "autofix_class": "test_addition",
+    "suggested_fix": "Mock getBoundingClientRect on track div to left=0,width=200. pointerdown at clientX=0->onChange(min). clientX=200->onChange(max). clientX=100->onChange(Math.round(0.5*max)).",
+    "requires_verification": false,
+    "confidence": 0.92,
+    "pre_existing": false
+  },
+  {
+    "severity": "P2",
+    "title": "TradePanel SWR balance three-level fallback has no test",
+    "file": "src/components/TradePanel.tsx",
+    "line_hint": 62,
+    "description": "Line 62: const balance = balanceData?.balance ?? (userBalance ?? 500). When fetch errors, sliderMax should degrade to userBalance or 500. No test simulates a fetch rejection. Reordering or removing the fallback branches would be undetected.",
+    "autofix_class": "test_addition",
+    "suggested_fix": "Stub fetch to return 500. Render with userBalance=200->CoinSlider max=200. Render without userBalance->CoinSlider max=500.",
+    "requires_verification": false,
+    "confidence": 0.88,
+    "pre_existing": false
+  },
+  {
+    "severity": "P3",
+    "title": "vitest.config.ts environment:node blocks all component tests",
+    "file": "vitest.config.ts",
+    "line_hint": 10,
+    "description": "Global Vitest environment is node. Component tests using @testing-library/react require DOM APIs (document, window, getBoundingClientRect). Without jsdom, tests fail at render. No setupFiles for @testing-library/jest-dom and no jsdom package visible in project.",
+    "autofix_class": "config_addition",
+    "suggested_fix": "Install @testing-library/react, @testing-library/user-event, @testing-library/jest-dom, jsdom. In vitest.config.ts add environmentMatchGlobs: [[\"src/components/**\",\"jsdom\"]] and setupFiles: [\"./src/test/setup.ts\"]. Create setup.ts: import @testing-library/jest-dom.",
+    "requires_verification": true,
+    "confidence": 0.9,
+    "pre_existing": false
+  }
+]

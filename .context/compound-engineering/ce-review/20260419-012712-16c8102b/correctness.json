@@ -1,0 +1,196 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "id": "COR-001",
+      "title": "Oracle outcome encoding inverted: milestone met resolves as NO(1) instead of YES(0)",
+      "severity": "P0",
+      "file": "src/lib/oracle.ts",
+      "line": 43,
+      "autofix_class": "safe_auto",
+      "confidence": 1,
+      "owner": "review-fixer",
+      "requires_verification": false,
+      "pre_existing": true,
+      "description": "Line 43 ternary metric >= milestoneThreshold ? 1 : 0 produces outcome=1 (NO per schema) when milestone is met. Schema defines 0=YES 1=NO. YES bettors receive no payout on markets that crossed the threshold; NO bettors are paid instead.",
+      "why_it_matters": "Every auto-resolved market where the milestone was crossed pays the wrong side. Magnitude equals the entire payout pool per affected market.",
+      "evidence": "oracle.ts:43. schema.ts:106 defines 0=YES 1=NO. docs/solutions/logic-errors/market-outcome-resolution-and-display.md confirms correct expression is ? 0 : 1 and states fix was NOT applied.",
+      "fix": "oracle.ts line 43: change metric !== null && metric >= market.milestoneThreshold ? 1 : 0 to ? 0 : 1"
+    },
+    {
+      "id": "COR-002",
+      "title": "Oracle latest-poll-only strategy: TikTok count rollback or concurrent insert resolves YES market as NO",
+      "severity": "P0",
+      "file": "src/lib/oracle.ts",
+      "line": 27,
+      "autofix_class": "gated_auto",
+      "confidence": 0.95,
+      "owner": "review-fixer",
+      "requires_verification": false,
+      "pre_existing": true,
+      "description": "resolveMarket reads only the most recent poll row (ORDER BY polledAt DESC LIMIT 1). TikTok engagement normalization routinely revises counts downward after viral spikes. If threshold was crossed at T and cron fires at T+9min with revised lower count the oracle resolves NO. A concurrent poller inserting a lower-count row between the milestone-crossing insert and the resolveMarket call will be picked up as latest also resolving NO.",
+      "why_it_matters": "Markets that legitimately crossed the milestone resolve NO paying the wrong side. No error is raised; the transaction completes normally with the wrong outcome.",
+      "evidence": "oracle.ts lines 27-32 single-row latest-poll lookup. docs/solutions/logic-errors/market-outcome-resolution-and-display.md Bug 1 documents this and provides the fix; fix NOT applied.",
+      "fix": "Replace single-poll lookup with gte predicate across all polls for the market. Resolve YES (outcome=0) if any row crosses threshold NO (outcome=1) otherwise. See docs/solutions for exact Drizzle query."
+    },
+    {
+      "id": "COR-003",
+      "title": "distributePayout pays raw share count as coins 1:1 with no pool normalization -- design intent unverified",
+      "severity": "P1",
+      "file": "src/lib/services/payout.ts",
+      "line": 41,
+      "autofix_class": "manual",
+      "confidence": 0.85,
+      "owner": "human",
+      "requires_verification": true,
+      "pre_existing": false,
+      "description": "Payout per winner is parseFloat(p.shares).toFixed(2) treating 1 share = 1 coin. In an LMSR market shares and coins are not 1:1. A share bought when YES was at 0.90 cost ~0.90 coins; at 0.10 it cost ~0.10 coins. If 1-share=1-coin is intentional this creates exploitable arbitrage: buy cheap shares in a skewed market and collect 1 coin per share on resolution. If pro-rata pool distribution is intended payout should be (userShares / totalWinningShares) * totalPoolCoins.",
+      "why_it_matters": "If 1-share=1-coin is not intended total coins paid out may exceed coins collected creating systemic balance inflation.",
+      "evidence": "payout.ts:41 payout = parseFloat(p.shares).toFixed(2). trade.ts buyShares uses LMSR sharesForCost so shares are not 1:1 with coins paid.",
+      "fix": "Confirm design intent. If 1-share=1-coin is correct add a comment. If pro-rata is intended compute totalWinningShares and totalPool then distribute proportionally."
+    },
+    {
+      "id": "COR-004",
+      "title": "refundPositions has no idempotency guard -- duplicate refunds if called twice before shares are zeroed",
+      "severity": "P1",
+      "file": "src/lib/services/payout.ts",
+      "line": 72,
+      "autofix_class": "gated_auto",
+      "confidence": 0.9,
+      "owner": "review-fixer",
+      "requires_verification": false,
+      "pre_existing": false,
+      "description": "refundPositions filters on ne(positions.shares, 0) then zeros shares at the end. No check for existing refund coin_transactions before updating balances. Two concurrent DELETE cancel requests both see non-zero shares both credit balances and both attempt to insert coin_transactions. The unique index causes the second INSERT to constraint-fail and roll back that transaction but any retry repeats the balance credit. distributePayout has an equivalent alreadyPaid guard that refundPositions lacks.",
+      "why_it_matters": "Concurrent cancel invocations create double-credit risk relying entirely on DB constraint enforcement rather than application-level guarding.",
+      "evidence": "payout.ts lines 72-123: no pre-check for existing refund records. Compare distributePayout lines 24-33 which queries existing payouts before acting.",
+      "fix": "Before updating balances query coinTransactions WHERE referenceId = marketId AND type = refund. Build alreadyRefunded set and exclude those userIds."
+    },
+    {
+      "id": "COR-005",
+      "title": "Oracle calls distributePayout unconditionally regardless of whether status UPDATE matched any rows",
+      "severity": "P1",
+      "file": "src/lib/oracle.ts",
+      "line": 47,
+      "autofix_class": "gated_auto",
+      "confidence": 0.82,
+      "owner": "review-fixer",
+      "requires_verification": false,
+      "pre_existing": false,
+      "description": "Market row and poll are read outside the transaction (lines 19-34). Inside the transaction the UPDATE guards on status=resolving but distributePayout is called unconditionally on line 54. If two concurrent workers race both read status=resolving the first UPDATE wins the second UPDATE matches 0 rows but distributePayout still executes. The alreadyPaid check is the only protection and is valid only if the first worker fully committed before the second queries alreadyPaid.",
+      "why_it_matters": "Under concurrent cron execution distributePayout may be called twice with potentially different outcomes if polls changed between the two reads possibly paying both sides.",
+      "evidence": "oracle.ts lines 47-55: UPDATE result not checked before calling distributePayout on line 54.",
+      "fix": "Use .returning() on the UPDATE. If 0 rows returned exit early without calling distributePayout. Alternatively move market and poll reads inside the transaction."
+    },
+    {
+      "id": "COR-006",
+      "title": "Cron performs state transitions and market SELECT as separate non-transactional operations",
+      "severity": "P2",
+      "file": "src/app/api/cron/resolve-markets/route.ts",
+      "line": 30,
+      "autofix_class": "manual",
+      "confidence": 0.78,
+      "owner": "human",
+      "requires_verification": true,
+      "pre_existing": false,
+      "description": "Three sequential db.update calls (lines 23 30 36) are followed by a db.select at line 43 all outside any transaction wrapper. A market transitioned to RESOLVING may already be status=resolved by the time the SELECT fires if a concurrent poller completed resolution. resolveMarket will no-op the status UPDATE but still calls distributePayout due to COR-005.",
+      "why_it_matters": "Idempotency guards are not strong enough to absorb all races introduced by this non-atomic sequence.",
+      "evidence": "resolve-markets/route.ts lines 23-43: three separate db.update calls then db.select without wrapping transaction.",
+      "fix": "Capture IDs of markets transitioned to RESOLVING using .returning() on those UPDATE statements and resolve only those specific IDs eliminating the separate SELECT."
+    },
+    {
+      "id": "COR-007",
+      "title": "distributePayout alreadyPaid check is per-userId but positions are per (userId, outcome) -- wrong granularity",
+      "severity": "P2",
+      "file": "src/lib/services/payout.ts",
+      "line": 33,
+      "autofix_class": "safe_auto",
+      "confidence": 0.8,
+      "owner": "review-fixer",
+      "requires_verification": false,
+      "pre_existing": false,
+      "description": "alreadyPaid is keyed only on userId. The positions uniqueIndex is on (userId, marketId, outcome) so a user can legally hold both YES and NO positions. In the COR-005 race if distributePayout is called twice with different outcomes the second call skips the user because they appear in alreadyPaid from the first call. Which outcome gets paid depends on which call inserted coin_transactions first not which UPDATE won the status guard.",
+      "why_it_matters": "Winners from the correct outcome may not be paid if the wrong-outcome call ran and committed first.",
+      "evidence": "payout.ts:33 alreadyPaid keyed on userId only. schema.ts lines 150-153 uniqueIndex on (userId, marketId, outcome) -- dual positions schema-legal.",
+      "fix": "Fix COR-005 first. As standalone hardening make idempotency check per (userId, outcome) rather than per userId."
+    },
+    {
+      "id": "COR-008",
+      "title": "refundPositions computes refund as shares * avgCostBasis but avgCostBasis is not updated on sells",
+      "severity": "P2",
+      "file": "src/lib/services/payout.ts",
+      "line": 85,
+      "autofix_class": "manual",
+      "confidence": 0.75,
+      "owner": "human",
+      "requires_verification": true,
+      "pre_existing": false,
+      "description": "When a user sells shares trade.ts updates position.shares but does not recalculate avgCostBasis. On cancel refund = remaining_shares * avgCostBasis (blended average across all buys). Example: buy 10 shares at 0.5 (cost 5) then 10 at 0.9 (cost 9) avgCostBasis=0.7. Sell 10 shares. Remaining 10 shares but avgCostBasis still 0.7 cancel refund=7. Actual net remaining cost is between 5 and 9 depending on which shares remained.",
+      "why_it_matters": "Users who traded before cancellation receive inaccurate refunds. Over-refund inflates total supply; under-refund harms users on a cancelled market.",
+      "evidence": "payout.ts:85 refundAmount = parseFloat(p.shares) * parseFloat(p.avgCostBasis). trade.ts sellShares lines 354-360: updates position.shares but no avgCostBasis recalculation.",
+      "fix": "Compute net cost from trade records (sum buy costs minus sell proceeds for this user/market/outcome) or document blended-average approximation as accepted design choice."
+    },
+    {
+      "id": "COR-009",
+      "title": "Admin resolve route UPDATE has no status guard -- concurrent auto-resolution can be overwritten",
+      "severity": "P3",
+      "file": "src/app/api/admin/markets/[id]/resolve/route.ts",
+      "line": 69,
+      "autofix_class": "safe_auto",
+      "confidence": 0.72,
+      "owner": "review-fixer",
+      "requires_verification": false,
+      "pre_existing": false,
+      "description": "Admin resolve route validates market.status (line 62) but the UPDATE at line 69 uses only WHERE id=id with no status guard. Under READ COMMITTED isolation a concurrent auto-resolution can change the market to resolved between the read and the UPDATE. Admin UPDATE then overwrites the outcome and calls distributePayout again potentially with a different outcome.",
+      "why_it_matters": "A market could be re-resolved to a different outcome and distributePayout called twice for potentially different sides.",
+      "evidence": "admin resolve route.ts:69 uses .where(eq(markets.id, id)) with no status predicate. Compare oracle.ts:52 which adds eq(markets.status, resolving).",
+      "fix": "Add status guard to UPDATE WHERE: .where(and(eq(markets.id, id), eq(markets.status, market.status))). Check .returning() count; if 0 return error indicating status changed concurrently."
+    }
+  ],
+  "residual_risks": [
+    {
+      "id": "RR-001",
+      "description": "TikTok count rollback policy unresolved. Once COR-002 is fixed with any-poll-ever semantics a market where TikTok corrects inflated counts post-resolution stays permanently YES. If business decides current-count-at-resolution wins the any-poll-ever fix would itself be wrong.",
+      "severity": "P2",
+      "owner": "human"
+    },
+    {
+      "id": "RR-002",
+      "description": "coinTransactions unique index on (userId, referenceId, type) means one payout and one refund record per user per market. If status guards are bypassed and a market receives both refund and payout the second INSERT will constraint-fail; partial commit risk if balance UPDATE and INSERT are not in the same atomic block.",
+      "severity": "P3",
+      "owner": "human"
+    },
+    {
+      "id": "RR-003",
+      "description": "Cron marks status=failed (resolve-markets/route.ts:53) outside the resolveMarket transaction. If resolveMarket throws after market UPDATE committed but before distributePayout completed the market is marked failed. Subsequent manual resolution calls distributePayout again with alreadyPaid as the only protection which has the granularity issue in COR-007.",
+      "severity": "P2",
+      "owner": "human"
+    }
+  ],
+  "testing_gaps": [
+    {
+      "id": "TG-001",
+      "description": "No test covering oracle outcome encoding. COR-001 has been documented as a known bug indicating this test does not exist.",
+      "suggested_test": "Insert market with milestoneThreshold=1000 insert poll with viewCount=1000 call resolveMarket() assert market.outcome === 0 and YES position holders received payouts equal to their shares."
+    },
+    {
+      "id": "TG-002",
+      "description": "No test for any-poll-ever milestone semantics.",
+      "suggested_test": "Insert polls with viewCounts [500 1500 800] against threshold=1000 call resolveMarket() assert outcome=0 regardless of latest poll value."
+    },
+    {
+      "id": "TG-003",
+      "description": "No concurrent distributePayout test. The alreadyPaid idempotency check is not integration-tested under parallel execution.",
+      "suggested_test": "Call distributePayout twice for the same marketId+outcome via Promise.all. Assert user balances incremented exactly once and exactly one payout coin_transaction row exists per user."
+    },
+    {
+      "id": "TG-004",
+      "description": "No test for refundPositions idempotency (COR-004).",
+      "suggested_test": "Call refundPositions twice for the same marketId. Assert balances incremented exactly once and exactly one refund coin_transaction row exists per user."
+    },
+    {
+      "id": "TG-005",
+      "description": "No test for post-sell cancellation refund accuracy (COR-008).",
+      "suggested_test": "Buy 20 shares across two buys at different prices sell 10 shares receiving AMM refund cancel market assert cancel refund equals net cost of remaining 10 shares (total buy cost minus sell proceeds received from AMM)."
+    }
+  ]
+}

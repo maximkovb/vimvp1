@@ -1,4 +1,7 @@
 <!-- BEGIN:nextjs-agent-rules -->
+`docs/solutions/` — documented solutions to past problems (bugs, best practices, runtime issues), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing features or debugging in documented areas.
+
+
 # This is NOT the Next.js you know
 
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
@@ -40,6 +43,18 @@ Omitting any of these degrades the floor guard to velocity-only with age=1h (wea
   Until that route exists, use `publishImmediately: true` if the agent should go live immediately.
 
 All routes use `Authorization: Bearer <CRON_SECRET>`.
+
+## Trading
+
+Server actions in `src/lib/actions/trade.ts`. Auth: NextAuth session cookie (not `CRON_SECRET`).
+
+- **`buyShares(marketId, outcome, amount)`** — buy shares with coins. `outcome`: 0 = YES, 1 = NO. `amount`: integer coins ≥ 1, ≤ 1,000,000. Returns `{ success: true, shares, cost }` or `{ error: string }`.
+- **`sellShares(marketId, outcome, sharesToSell)`** — sell shares back to the AMM. `sharesToSell`: positive number. Returns `{ success: true, refund }` or `{ error: string }`.
+- **`previewTrade(marketId, outcome, amount)`** — estimate shares, cost, and price impact without executing. Returns `{ shares, cost, avgPrice, priceImpact, currentPrice, newPrice }` or `{ error: string }`.
+
+### User Balance
+
+- `GET /api/balance` — returns `{ balance, loginStreak, lastLoginReward }`. Auth: NextAuth session. No `CRON_SECRET` required.
 
 ## Market Inspection
 

@@ -1,8 +1,8 @@
 "use server";
 
 import { db } from "@/db";
-import { markets, priceSnapshots, youtubePolls, tiktokPolls } from "@/db/schema";
-import { and, eq, or } from "drizzle-orm";
+import { markets, priceSnapshots, tiktokPolls } from "@/db/schema";
+import { and, eq } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { isAdmin } from "@/lib/admin";
 import { allPrices } from "@/lib/lmsr";
@@ -10,38 +10,10 @@ import { computeMilestoneFloor } from "@/lib/market-utils";
 import { computeExpectedOutcome } from "@/lib/calibration";
 import { revalidatePath } from "next/cache";
 import { distributePayout, refundPositions } from "@/lib/services/payout";
-import { YOUTUBE_THUMBNAIL_RE, TIKTOK_THUMBNAIL_RE, YOUTUBE_API_BASE, YT_TIMEOUT_MS } from "@/lib/constants";
-import { extractVideoId } from "@/lib/youtube";
-import { extractTikTokVideoId, fetchTikTokStatsById, isTikTokUrl } from "@/lib/tiktok";
-import { computeMarketSuggestion } from "@/lib/services/marketSuggestion";
+import { TIKTOK_THUMBNAIL_RE, TIKTOK_PLAY_URL_RE } from "@/lib/constants";
+import { extractTikTokVideoId, fetchTikTokStatsById } from "@/lib/tiktok";
 import { resolveMarket } from "@/lib/oracle";
-
-// ─── YouTube API response shapes ────────────────────────────────────────────
-
-interface YTVideoItem {
-  snippet: {
-    title: string;
-    channelId: string;
-    channelTitle: string;
-    publishedAt: string;
-    categoryId?: string;
-    description?: string;
-    thumbnails?: {
-      medium?: { url: string };
-      default?: { url: string };
-    };
-  };
-  statistics: {
-    viewCount?: string;
-    likeCount?: string;
-  };
-}
-
-interface YTListResponse<T> {
-  items?: T[];
-}
-
-// ─── Actions ─────────────────────────────────────────────────────────────────
+import { computeMarketSuggestion, type MarketSuggestionInput } from "@/lib/services/marketSuggestion";
 
 // ─── Exported success types ───────────────────────────────────────────────────
 // Derived at the type level so client components (page.tsx) don't duplicate shapes manually.
@@ -50,129 +22,75 @@ export type VideoStatsSuccess = Exclude<
   Awaited<ReturnType<typeof fetchVideoStats>>,
   { error: string }
 >;
-export type SuggestionSuccess = Exclude<
-  Awaited<ReturnType<typeof generateMarketSuggestion>>,
+
+export type MarketSuggestionSuccess = Exclude<
+  Awaited<ReturnType<typeof fetchMarketSuggestion>>,
   { error: string }
 >;
 
 /**
- * Phase 1 of two-phase fetch — fast video stats only (~500ms).
- * Returns video metadata without channel analytics or market suggestion.
- * Call generateMarketSuggestion next for the contract recommendation.
+ * Phase 2 fetch — contract suggestion based on video stats (~200ms, DB + local computation).
+ * Returns algorithmic contract recommendation (milestone, resolution window, risk tier).
+ */
+export async function fetchMarketSuggestion(input: MarketSuggestionInput) {
+  const session = await auth();
+  if (!isAdmin(session)) return { error: "Unauthorized" };
+  try {
+    return await computeMarketSuggestion(input);
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "Suggestion failed" };
+  }
+}
+
+/**
+ * Phase 1 fetch — fast TikTok video stats only (~500ms).
+ * Returns video metadata without market suggestion.
  */
 export async function fetchVideoStats(url: string) {
   const session = await auth();
   if (!isAdmin(session)) return { error: "Unauthorized" };
 
-  // ── TikTok path ──────────────────────────────────────────────────────────
-  if (isTikTokUrl(url)) {
-    const videoId = extractTikTokVideoId(url);
-    if (!videoId) return { error: "Invalid TikTok URL — use a full URL like https://www.tiktok.com/@user/video/1234567890" };
+  const videoId = extractTikTokVideoId(url);
+  if (!videoId) return { error: "Invalid TikTok URL — use a full URL like https://www.tiktok.com/@user/video/1234567890" };
 
-    let stats;
-    try {
-      stats = await fetchTikTokStatsById(videoId);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { error: `TikTok API error: ${msg}` };
-    }
-
-    if (!stats) return { error: "TikTok video not found or is private" };
-
-    return {
-      platform: "tiktok" as const,
-      videoId,
-      tikapiPostId: stats.tikapiPostId,
-      title: `@${stats.creatorId}`,
-      thumbnail: stats.thumbnailUrl,
-      channelTitle: stats.creatorName,
-      creatorId: stats.creatorId,
-      description: "",
-      viewCount: stats.viewCount,
-      likeCount: stats.likeCount,
-      commentCount: stats.commentCount,
-      shareCount: stats.shareCount,
-      publishedAt: stats.createdAt,
-      categoryId: undefined,
-    };
+  let stats;
+  try {
+    stats = await fetchTikTokStatsById(videoId);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { error: `TikTok API error: ${msg}` };
   }
 
-  // ── YouTube path ─────────────────────────────────────────────────────────
-  const videoId = extractVideoId(url);
-  if (!videoId) return { error: "Invalid YouTube URL" };
-
-  const apiKey = process.env.YOUTUBE_API_KEY;
-  if (!apiKey) return { error: "YouTube API key not configured" };
-
-  const videoRes = await fetch(
-    `${YOUTUBE_API_BASE}/videos?part=snippet,statistics&id=${videoId}&key=${apiKey}&fields=items(snippet(title,thumbnails,channelTitle,channelId,publishedAt,categoryId,description),statistics(viewCount,likeCount))`,
-    { cache: "no-store", signal: AbortSignal.timeout(YT_TIMEOUT_MS) }
-  );
-
-  if (!videoRes.ok) {
-    const isQuotaError = videoRes.status === 403;
-    return { error: isQuotaError ? "YouTube API quota exceeded — try again later" : "YouTube API error" };
-  }
-
-  const videoData: YTListResponse<YTVideoItem> = await videoRes.json();
-  if (!videoData.items || videoData.items.length === 0) {
-    return { error: "Video not found or is private" };
-  }
-
-  const item = videoData.items[0];
-  const thumbnails = item.snippet.thumbnails;
+  if (!stats) return { error: "TikTok video not found or is private" };
 
   return {
-    platform: "youtube" as const,
     videoId,
-    title: item.snippet.title,
-    thumbnail: thumbnails?.medium?.url ?? thumbnails?.default?.url ?? "",
-    channelTitle: item.snippet.channelTitle,
-    channelId: item.snippet.channelId,
-    description: item.snippet.description ?? "",
-    viewCount: parseInt(item.statistics.viewCount || "0"),
-    likeCount: parseInt(item.statistics.likeCount || "0"),
-    publishedAt: item.snippet.publishedAt,
-    categoryId: item.snippet.categoryId,
+    tikapiPostId: stats.tikapiPostId,
+    title: `@${stats.creatorId}`,
+    thumbnail: stats.thumbnailUrl,
+    channelTitle: stats.creatorName,
+    creatorId: stats.creatorId,
+    description: "",
+    playUrl: stats.playUrl,
+    viewCount: stats.viewCount,
+    likeCount: stats.likeCount,
+    commentCount: stats.commentCount,
+    shareCount: stats.shareCount,
+    publishedAt: stats.createdAt,
   };
-}
-
-/**
- * Phase 2 of two-phase fetch — channel analytics + market suggestion (~5–15s with LLM).
- * Auth wrapper around computeMarketSuggestion() — session-gated for browser use.
- *
- * Called by: admin UI (session auth).
- * For bearer-token access, POST /api/admin/market-suggestion calls computeMarketSuggestion() directly.
- */
-export async function generateMarketSuggestion(input: {
-  videoId: string;
-  title: string;
-  channelId: string;
-  channelTitle: string;
-  publishedAt: string;
-  categoryId?: string;
-  viewCount: number;
-  likeCount: number;
-}) {
-  const session = await auth();
-  if (!isAdmin(session)) return { error: "Unauthorized" };
-
-  const apiKey = process.env.YOUTUBE_API_KEY;
-  if (!apiKey) return { error: "YouTube API key not configured" };
-
-  return computeMarketSuggestion(input, apiKey);
 }
 
 export async function createMarket(formData: FormData) {
   const session = await auth();
   if (!isAdmin(session)) return { error: "Unauthorized" };
+  const userId = session?.user?.id;
+  if (!userId) return { error: "Session incomplete" };
 
   const videoUrl = (formData.get("videoUrl") ?? "") as string;
   const title = (formData.get("title") ?? "") as string;
   const description = (formData.get("description") ?? "") as string;
   const questionType = (formData.get("questionType") ?? "") as string;
-  const milestoneThresholdRaw = (formData.get("milestoneThreshold") ??
-    "") as string;
+  const milestoneThresholdRaw = (formData.get("milestoneThreshold") ?? "") as string;
   const bParameterRaw = (formData.get("bParameter") ?? "") as string;
   const resolutionHours = (formData.get("resolutionHours") ?? "") as string;
   // The admin UI always sets publishImmediately=true (checkbox removed).
@@ -190,11 +108,8 @@ export async function createMarket(formData: FormData) {
   // Narrow the type now that we've validated it.
   const validatedQuestionType = questionType as "views" | "likes";
 
-  const detectedPlatform = isTikTokUrl(videoUrl) ? "tiktok" : "youtube";
-  const videoId = detectedPlatform === "tiktok"
-    ? extractTikTokVideoId(videoUrl)
-    : extractVideoId(videoUrl);
-  if (!videoId) return { error: detectedPlatform === "tiktok" ? "Invalid TikTok URL" : "Invalid YouTube URL" };
+  const videoId = extractTikTokVideoId(videoUrl);
+  if (!videoId) return { error: "Invalid TikTok URL — paste a full tiktok.com/@user/video/... URL" };
 
   // Server-side bParameter validation — b=0 causes LMSR divide-by-zero.
   const b = parseFloat(bParameterRaw || "100");
@@ -213,8 +128,7 @@ export async function createMarket(formData: FormData) {
     return { error: "Invalid milestoneThreshold" };
   }
 
-  // Floor guard — milestone must exceed what the channel typically achieves in the window.
-  // These fields are required; omitting them is a hard error (not a silent bypass).
+  // Floor guard — milestone must exceed what the video typically achieves in the window.
   // Number() correctly parses scientific notation ("1e6" → 1000000); parseInt would truncate to 1.
   const initialViewCount = Math.round(Number((formData.get("initialViewCount") ?? "") as string));
   const initialLikeCount = Math.round(Number((formData.get("initialLikeCount") ?? "") as string));
@@ -224,8 +138,7 @@ export async function createMarket(formData: FormData) {
   }
   const initialCount = validatedQuestionType === "views" ? initialViewCount : initialLikeCount;
 
-  // channelAvgViews is client-supplied (from Phase 2 suggestion) — clamped but trusted.
-  // Falls back to 0, which degrades to velocity-only projection.
+  // channelAvgViews falls back to 0, which degrades to velocity-only projection.
   const channelAvgViews = Math.max(
     0,
     Math.round(Number((formData.get("channelAvgViews") ?? "0") as string))
@@ -242,7 +155,7 @@ export async function createMarket(formData: FormData) {
 
   // Validate resolutionHours before using it in any computation.
   const resolutionHoursNum = parseInt(resolutionHours || "");
-  if (![24, 48, 72].includes(resolutionHoursNum) || isNaN(resolutionHoursNum)) {
+  if (isNaN(resolutionHoursNum) || ![24, 48, 72].includes(resolutionHoursNum)) {
     return { error: "resolutionHours must be 24, 48, or 72" };
   }
 
@@ -252,28 +165,25 @@ export async function createMarket(formData: FormData) {
     resolutionHoursNum,
     channelAvgViews
   );
-  if (Number(milestoneThresholdRaw) < requiredFloor) {
+  if (Number(thresholdBigInt) < requiredFloor) {
     return {
       error: `Milestone must exceed the expected ${validatedQuestionType} count at resolution (minimum: ${requiredFloor.toLocaleString()})`,
     };
   }
 
-  // Read video metadata from hidden form fields — avoids re-calling fetchVideoMetadata
-  // (which would trigger a second Claude API call)
+  // Read video metadata from hidden form fields — avoids re-calling fetchVideoStats
   const videoTitle = (formData.get("videoTitle") as string) || "";
   const thumbnailRaw = (formData.get("thumbnail") as string) || "";
   const channelTitle = (formData.get("channelTitle") as string) || "";
-  const channelId = (formData.get("channelId") as string) || undefined;
   const creatorId = (formData.get("creatorId") as string) || undefined;
   const tikapiPostId = (formData.get("tikapiPostId") as string) || undefined;
   const videoDescriptionRaw = (formData.get("videoDescription") as string) || undefined;
   const videoDescription = videoDescriptionRaw?.slice(0, 5000) || undefined;
+  const playUrlRaw = (formData.get("playUrl") as string) || "";
 
-  // Only persist thumbnails from known CDN URLs — rejects injected URLs.
-  const isValidThumbnail = detectedPlatform === "tiktok"
-    ? TIKTOK_THUMBNAIL_RE.test(thumbnailRaw)
-    : YOUTUBE_THUMBNAIL_RE.test(thumbnailRaw);
-  const thumbnail = isValidThumbnail ? thumbnailRaw : "";
+  // Only persist URLs from known CDN domains — rejects injected or off-domain URLs.
+  const thumbnail = TIKTOK_THUMBNAIL_RE.test(thumbnailRaw) ? thumbnailRaw : "";
+  const playUrl = TIKTOK_PLAY_URL_RE.test(playUrlRaw) ? playUrlRaw : undefined;
 
   const now = new Date();
   const hours = resolutionHoursNum;
@@ -282,57 +192,46 @@ export async function createMarket(formData: FormData) {
 
   const marketId = crypto.randomUUID();
 
-  await db.insert(markets).values({
-    id: marketId,
-    videoId,
-    platform: detectedPlatform,
-    ...(tikapiPostId ? { tikapiPostId } : {}),
-    title,
-    description: description || null,
-    questionType: validatedQuestionType,
-    milestoneThreshold: thresholdBigInt,
-    bParameter: b.toFixed(2),
-    status: publishImmediately ? "active" : "draft",
-    videoMetadata: {
-      title: videoTitle,
-      thumbnail,
-      channelTitle,
-      ...(channelId ? { channelId } : {}),
-      ...(creatorId ? { creatorId } : {}),
-      ...(videoDescription ? { description: videoDescription } : {}),
-    },
-    opensAt: publishImmediately ? now : null,
-    haltsAt: publishImmediately ? haltsAt : null,
-    resolvesAt: publishImmediately ? resolvesAt : null,
-    createdBy: session!.user!.id!,
+  await db.transaction(async (tx) => {
+    await tx.insert(markets).values({
+      id: marketId,
+      videoId,
+      ...(tikapiPostId ? { tikapiPostId } : {}),
+      title,
+      description: description || null,
+      questionType: validatedQuestionType,
+      milestoneThreshold: thresholdBigInt,
+      bParameter: b.toFixed(2),
+      status: publishImmediately ? "active" : "draft",
+      videoMetadata: {
+        title: videoTitle,
+        thumbnail,
+        channelTitle,
+        ...(creatorId ? { creatorId } : {}),
+        ...(videoDescription ? { description: videoDescription } : {}),
+        ...(playUrl ? { playUrl } : {}),
+      },
+      opensAt: publishImmediately ? now : null,
+      haltsAt: publishImmediately ? haltsAt : null,
+      resolvesAt: publishImmediately ? resolvesAt : null,
+      createdBy: userId,
+    });
+
+    if (publishImmediately) {
+      const prices = allPrices([0, 0], b);
+      await tx.insert(priceSnapshots).values({
+        marketId,
+        priceYes: prices[0].toFixed(6),
+        priceNo: prices[1].toFixed(6),
+      });
+    }
+
+    await tx.insert(tiktokPolls).values({
+      marketId,
+      viewCount: BigInt(initialViewCount),
+      likeCount: BigInt(initialLikeCount),
+    });
   });
-
-  // Create initial price snapshot
-  if (publishImmediately) {
-    const prices = allPrices([0, 0], b);
-    await db.insert(priceSnapshots).values({
-      marketId,
-      priceYes: prices[0].toFixed(6),
-      priceNo: prices[1].toFixed(6),
-    });
-  }
-
-  // Insert initial poll row using the already-validated view/like counts above.
-  if (detectedPlatform === "tiktok") {
-    await db.insert(tiktokPolls).values({
-      marketId,
-      viewCount: BigInt(initialViewCount),
-      likeCount: BigInt(initialLikeCount),
-      commentCount: null,
-      shareCount: null,
-    });
-  } else {
-    await db.insert(youtubePolls).values({
-      marketId,
-      viewCount: BigInt(initialViewCount),
-      likeCount: BigInt(initialLikeCount),
-    });
-  }
 
   revalidatePath("/");
   revalidatePath("/admin/markets");
@@ -446,7 +345,7 @@ export async function manualResolve(marketId: string, outcome: number) {
 }
 
 /**
- * Quick test market creation — bypasses the two-phase AI suggestion pipeline.
+ * Quick test market creation — bypasses the AI suggestion pipeline.
  * Uses b=0.01 and a fixed 48h resolution window for fast oracle testing.
  * Admin-only.
  */
@@ -458,70 +357,31 @@ export async function createTestMarket(
 ) {
   const session = await auth();
   if (!isAdmin(session)) return { error: "Unauthorized" };
+  const userId = session?.user?.id;
+  if (!userId) return { error: "Session incomplete" };
 
-  const testPlatform = isTikTokUrl(videoUrl) ? "tiktok" : "youtube";
-  const videoId = testPlatform === "tiktok"
-    ? extractTikTokVideoId(videoUrl)
-    : extractVideoId(videoUrl);
-  if (!videoId) return { error: testPlatform === "tiktok" ? "Invalid TikTok URL" : "Invalid YouTube URL" };
+  const videoId = extractTikTokVideoId(videoUrl);
+  if (!videoId) return { error: "Invalid TikTok URL — paste a full tiktok.com/@user/video/... URL" };
 
   if (!isFinite(milestoneThreshold) || milestoneThreshold < 1) {
     return { error: "Milestone must be at least 1" };
   }
 
-  // Fetch video stats from the appropriate platform
-  let viewCount = 0;
-  let likeCount = 0;
-  let videoTitle = "";
-  let thumbnail = "";
-  let channelTitle = "";
-  let channelId: string | undefined;
-  let tikapiPostId: string | undefined;
-
-  if (testPlatform === "tiktok") {
-    let stats;
-    try {
-      stats = await fetchTikTokStatsById(videoId);
-    } catch (err) {
-      return { error: `TikTok API error: ${err instanceof Error ? err.message : String(err)}` };
-    }
-    if (!stats) return { error: "TikTok video not found or is private" };
-    viewCount = stats.viewCount;
-    likeCount = stats.likeCount;
-    videoTitle = `@${stats.creatorId}`;
-    thumbnail = TIKTOK_THUMBNAIL_RE.test(stats.thumbnailUrl) ? stats.thumbnailUrl : "";
-    channelTitle = stats.creatorName;
-    tikapiPostId = stats.tikapiPostId;
-  } else {
-    const apiKey = process.env.YOUTUBE_API_KEY;
-    if (!apiKey) return { error: "YouTube API key not configured" };
-
-    const videoRes = await fetch(
-      `${YOUTUBE_API_BASE}/videos?part=snippet,statistics&id=${videoId}&key=${apiKey}&fields=items(snippet(title,thumbnails,channelTitle,channelId),statistics(viewCount,likeCount))`,
-      { cache: "no-store", signal: AbortSignal.timeout(YT_TIMEOUT_MS) }
-    );
-
-    if (!videoRes.ok) {
-      return { error: `YouTube API error: ${videoRes.status}` };
-    }
-
-    const videoData: YTListResponse<YTVideoItem> = await videoRes.json();
-    if (!videoData.items || videoData.items.length === 0) {
-      return { error: "Video not found or is private" };
-    }
-
-    const item = videoData.items[0];
-    const thumbnailRaw =
-      item.snippet.thumbnails?.medium?.url ??
-      item.snippet.thumbnails?.default?.url ??
-      "";
-    videoTitle = item.snippet.title;
-    thumbnail = YOUTUBE_THUMBNAIL_RE.test(thumbnailRaw) ? thumbnailRaw : "";
-    viewCount = parseInt(item.statistics.viewCount || "0", 10);
-    likeCount = parseInt(item.statistics.likeCount || "0", 10);
-    channelTitle = item.snippet.channelTitle;
-    channelId = item.snippet.channelId;
+  let stats;
+  try {
+    stats = await fetchTikTokStatsById(videoId);
+  } catch (err) {
+    return { error: `TikTok API error: ${err instanceof Error ? err.message : String(err)}` };
   }
+  if (!stats) return { error: "TikTok video not found or is private" };
+
+  const viewCount = stats.viewCount;
+  const likeCount = stats.likeCount;
+  const videoTitle = `@${stats.creatorId}`;
+  const thumbnail = TIKTOK_THUMBNAIL_RE.test(stats.thumbnailUrl) ? stats.thumbnailUrl : "";
+  const channelTitle = stats.creatorName;
+  const tikapiPostId = stats.tikapiPostId;
+  const playUrl = stats.playUrl && TIKTOK_PLAY_URL_RE.test(stats.playUrl) ? stats.playUrl : undefined;
 
   const now = new Date();
   const resolvesAt = new Date(now.getTime() + 48 * 60 * 60 * 1000);
@@ -534,7 +394,6 @@ export async function createTestMarket(
     await tx.insert(markets).values({
       id: marketId,
       videoId,
-      platform: testPlatform,
       ...(tikapiPostId ? { tikapiPostId } : {}),
       title: contractTitle.trim(),
       questionType,
@@ -545,12 +404,12 @@ export async function createTestMarket(
         title: videoTitle,
         thumbnail,
         channelTitle,
-        ...(channelId ? { channelId } : {}),
+        ...(playUrl ? { playUrl } : {}),
       },
       opensAt: now,
       haltsAt,
       resolvesAt,
-      createdBy: session!.user!.id!,
+      createdBy: userId,
     });
 
     await tx.insert(priceSnapshots).values({
@@ -559,21 +418,11 @@ export async function createTestMarket(
       priceNo: prices[1].toFixed(6),
     });
 
-    if (testPlatform === "tiktok") {
-      await tx.insert(tiktokPolls).values({
-        marketId,
-        viewCount: BigInt(viewCount),
-        likeCount: BigInt(likeCount),
-        commentCount: null,
-        shareCount: null,
-      });
-    } else {
-      await tx.insert(youtubePolls).values({
-        marketId,
-        viewCount: BigInt(viewCount),
-        likeCount: BigInt(likeCount),
-      });
-    }
+    await tx.insert(tiktokPolls).values({
+      marketId,
+      viewCount: BigInt(viewCount),
+      likeCount: BigInt(likeCount),
+    });
   });
 
   revalidatePath("/");

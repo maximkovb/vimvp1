@@ -1,0 +1,100 @@
+{
+  "reviewer": "security",
+  "findings": [
+    {
+      "id": "SEC-001",
+      "title": "CRON_SECRET is a known-compromised value still present in working tree",
+      "severity": "critical",
+      "confidence": 0.98,
+      "file": "C:/Users/rkovb/projects/virality/.env.local.example",
+      "lines": "22",
+      "description": "The file .env.local.example contains CRON_SECRET=vasyakosmos12. This value was previously hardcoded in scripts/poll-local.ps1 and committed to git history (stash entries 1d36005 and 738bc6c). CRON_SECRET is the sole authentication credential protecting the resolve, cancel, and cron-resolve endpoints. Any party with repo history access can immediately call these endpoints.",
+      "attack_path": "Read CRON_SECRET=vasyakosmos12 from git history or .env.local.example. Send POST /api/admin/markets/<id>/resolve with Authorization: Bearer vasyakosmos12 and body {outcome:0}. verifyCronAuth passes. distributePayout credits all YES holders.",
+      "remediation": "Rotate CRON_SECRET immediately using openssl rand -hex 32. Update Vercel env vars and all .env.local files. Replace real credentials in .env.local.example with placeholders. See todos/001 and todos/003.",
+      "references": [
+        "C:/Users/rkovb/projects/virality/todos/001-pending-p1-rotate-exposed-credentials.md",
+        "C:/Users/rkovb/projects/virality/todos/003-pending-p1-rotate-cron-secret.md"
+      ]
+    },
+    {
+      "id": "SEC-002",
+      "title": "Middleware matcher does not cover /api/admin/* -- no defense-in-depth session layer",
+      "severity": "medium",
+      "confidence": 0.92,
+      "file": "C:/Users/rkovb/projects/virality/src/middleware.ts",
+      "lines": "17-19",
+      "description": "The matcher covers /admin/:path* but not /api/admin/:path*. Resolution and cancel endpoints receive zero middleware-level checks. If verifyCronAuth is bypassed or its secret leaked, there is no session-based secondary gate.",
+      "attack_path": "Single-layer failure: if CRON_SECRET is compromised or accidentally removed from a route handler, the endpoint is fully open.",
+      "remediation": "Add /api/admin/:path* to the middleware matcher and assert req.auth plus admin role in addition to the bearer-token check.",
+      "references": [
+        "C:/Users/rkovb/projects/virality/src/middleware.ts"
+      ]
+    },
+    {
+      "id": "SEC-003",
+      "title": "Concurrent resolve requests can double-pay winners due to non-serialized idempotency check",
+      "severity": "medium",
+      "confidence": 0.68,
+      "file": "C:/Users/rkovb/projects/virality/src/lib/services/payout.ts",
+      "lines": "24-35",
+      "description": "distributePayout checks for prior payouts by selecting coin_transactions where reference_id=marketId and type=payout. At Postgres READ COMMITTED isolation, two concurrent transactions can both read zero prior payout rows before either commits, then both INSERT duplicate rows and UPDATE balances twice, doubling payouts. The status guard provides partial but not complete protection.",
+      "attack_path": "Two simultaneous POST /resolve requests for a market in status=failed. Both read 0 payout rows, pass alreadyPaid filter, and execute balance UPDATE plus INSERT. Winners receive double payouts.",
+      "remediation": "Add a UNIQUE constraint on coin_transactions(reference_id, user_id, type) to reject duplicate INSERTs at the database level. Alternatively use SELECT ... FOR UPDATE on the market row to serialize concurrent resolution.",
+      "references": [
+        "C:/Users/rkovb/projects/virality/src/lib/services/payout.ts",
+        "C:/Users/rkovb/projects/virality/src/app/api/admin/markets/[id]/resolve/route.ts"
+      ]
+    },
+    {
+      "id": "SEC-004",
+      "title": "AUTH_SECRET, DATABASE_URL, and OAuth credentials also exposed in .env.local.example",
+      "severity": "critical",
+      "confidence": 0.99,
+      "file": "C:/Users/rkovb/projects/virality/.env.local.example",
+      "lines": "2-7",
+      "description": "Beyond CRON_SECRET, .env.local.example contains a live Neon PostgreSQL connection string, the AUTH_SECRET JWT signing key, and Google OAuth client ID and secret. A forged JWT signed with the known AUTH_SECRET grants a fully authenticated session as any user including admin. Direct DB access allows arbitrary reads and writes outside the application layer.",
+      "attack_path": "Read AUTH_SECRET from .env.local.example. Forge a NextAuth JWT for ADMIN_EMAIL=maximcoolbug@gmail.com. Use forged session cookie to access admin endpoints and UI. Also: connect to Neon DB directly to manipulate balances.",
+      "remediation": "Rotate all credentials listed in todos/001 immediately. Prerequisite for all other security work.",
+      "references": [
+        "C:/Users/rkovb/projects/virality/todos/001-pending-p1-rotate-exposed-credentials.md"
+      ]
+    }
+  ],
+  "residual_risks": [
+    {
+      "id": "RR-001",
+      "title": "Timing oracle in verifyCronAuth already fixed in code despite pending todo status",
+      "description": "Todo 079 describes a timing oracle from a length pre-check. The current cron-auth.ts already uses the HMAC fix: per-process random HMAC_KEY, both sides hashed to fixed 32-byte digests, then timingSafeEqual. No action needed; todo 079 should be marked complete.",
+      "severity": "informational"
+    },
+    {
+      "id": "RR-002",
+      "title": "outcome field validated as literal 0 or 1 -- no injection risk",
+      "description": "ResolveSchema uses z.union([z.literal(0), z.literal(1)]). No SQL injection or semantic overflow via the outcome field.",
+      "severity": "informational"
+    },
+    {
+      "id": "RR-003",
+      "title": "Market ID path segment not validated as UUID format before DB query",
+      "description": "The [id] segment is passed directly to eq(markets.id, id) without UUID format validation. A malformed ID produces a DB error rather than injection. The cron route logs full error objects to console.error which could expose schema details in log aggregation. Low severity given the auth gate.",
+      "severity": "low"
+    }
+  ],
+  "testing_gaps": [
+    {
+      "id": "TG-001",
+      "description": "No test verifies that requests without an Authorization header or with a wrong secret return 401. The checklist in todos/072 only validates successful authorized requests.",
+      "recommendation": "Add tests: no header -> 401, wrong secret -> 401, correct secret -> expected status."
+    },
+    {
+      "id": "TG-002",
+      "description": "No concurrency test validates that double-firing the resolve endpoint does not double-pay winners.",
+      "recommendation": "Integration test: fire two parallel POST /resolve requests, assert coin_transactions payout row count equals number of winners not 2x."
+    },
+    {
+      "id": "TG-003",
+      "description": "No test verifies that a market in resolving status returns 422 from DELETE /cancel.",
+      "recommendation": "Test: market in resolving status -> DELETE cancel -> 422."
+    }
+  ]
+}

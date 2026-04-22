@@ -1,4 +1,4 @@
-import type { MarketStatus, QuestionType } from "@/db/schema";
+import type { MarketStatus, QuestionType, ProjectionLabel } from "@/db/schema";
 
 export interface MarketData {
   id: string;
@@ -9,7 +9,6 @@ export interface MarketData {
   /** BigInt serialized as string to survive JSON round-trip */
   milestoneThreshold: string;
   videoId: string;
-  platform: "youtube" | "tiktok" | "instagram";
   tikapiPostId?: string | null;
   videoMetadata: {
     title: string;
@@ -18,9 +17,13 @@ export interface MarketData {
     channelId?: string;
     description?: string;
     creatorId?: string;
+    playUrl?: string | null;
   } | null;
   priceYes: number;
   priceNo: number;
+  quantityYes: number;
+  quantityNo: number;
+  bParameter: number;
   outcome: number | null;
   resolvesAt: string | null;
   resolvedAt: string | null;
@@ -44,4 +47,8 @@ export interface MarketData {
     viewCount: number | null;
     likeCount: number | null;
   }>;
+  /** Authenticated user's current position in this market, or null if none / unauthenticated.
+   *  Only present in responses from GET /api/markets/[id]. */
+  userPosition?: { outcome: number; shares: number; avgCostBasis: number } | null;
+  projectionLabel?: ProjectionLabel | null;
 }

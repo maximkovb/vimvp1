@@ -1,0 +1,15 @@
+{
+  "run_id": "20260419-012712-16c8102b",
+  "branch": "feat/feed-time-remaining",
+  "head_sha": "408c8086a95613da662a3d0ac08d94600d5d993f",
+  "verdict": "Not ready",
+  "scope": "targeted-infrastructure-review",
+  "target_files": [
+    "src/lib/oracle.ts",
+    "src/lib/services/payout.ts",
+    "src/app/api/cron/resolve-markets/route.ts",
+    "src/app/api/admin/markets/[id]/resolve/route.ts",
+    "src/app/api/admin/markets/[id]/cancel/route.ts"
+  ],
+  "completed_at": "2026-04-19T01:28:00Z"
+}

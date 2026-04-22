@@ -1,7 +1,7 @@
 ---
 title: Replace TikAPI SDK with TikWM free HTTP API
 type: feat
-status: active
+status: completed
 date: 2026-03-30
 ---
 

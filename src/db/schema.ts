@@ -1,6 +1,5 @@
 import {
   pgTable,
-  pgEnum,
   text,
   timestamp,
   integer,
@@ -11,8 +10,6 @@ import {
   index,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
-
-export const platformEnum = pgEnum("platform", ["youtube", "tiktok", "instagram"]);
 
 // ─── Users ──────────────────────────────────────────────────────────────────────
 
@@ -89,13 +86,14 @@ export type MarketStatus =
 
 export type QuestionType = "views" | "likes";
 
+export type ProjectionLabel = "ON_TRACK" | "AT_RISK" | "BREAKING_OUT";
+
 export const markets = pgTable(
   "markets",
   {
     id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
     videoId: text("video_id").notNull(),
-    platform: platformEnum("platform").default("youtube").notNull(),
-    tikapiPostId: text("tikapi_post_id"),
+    tikapiPostId: text("tikapi_post_id"), // stores the canonical TikTok video ID from TikWM
     title: text("title").notNull(),
     description: text("description"),
     questionType: text("question_type").$type<QuestionType>().notNull(),
@@ -113,11 +111,13 @@ export const markets = pgTable(
       channelId?: string;
       description?: string;
       creatorId?: string;
+      playUrl?: string | null;
     }>(),
     opensAt: timestamp("opens_at", { mode: "date" }),
     haltsAt: timestamp("halts_at", { mode: "date" }),
     resolvesAt: timestamp("resolves_at", { mode: "date" }),
     resolvedAt: timestamp("resolved_at", { mode: "date" }),
+    projectionLabel: text("projection_label").$type<ProjectionLabel>(),
     createdBy: text("created_by").references(() => users.id),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
   },
@@ -131,7 +131,6 @@ export const marketsRelations = relations(markets, ({ many }) => ({
   positions: many(positions),
   trades: many(trades),
   priceSnapshots: many(priceSnapshots),
-  youtubePolls: many(youtubePolls),
   tiktokPolls: many(tiktokPolls),
 }));
 
@@ -212,38 +211,15 @@ export const priceSnapshotsRelations = relations(priceSnapshots, ({ one }) => ({
   market: one(markets, { fields: [priceSnapshots.marketId], references: [markets.id] }),
 }));
 
-// ─── YouTube Polls ──────────────────────────────────────────────────────────────
-
-export const youtubePolls = pgTable(
-  "youtube_polls",
-  {
-    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
-    marketId: text("market_id").notNull().references(() => markets.id),
-    viewCount: bigint("view_count", { mode: "bigint" }),
-    likeCount: bigint("like_count", { mode: "bigint" }),
-    polledAt: timestamp("polled_at", { mode: "date" }).notNull().defaultNow(),
-  },
-  (table) => [
-    index("youtube_polls_market_id_idx").on(table.marketId),
-    index("youtube_polls_market_polled_idx").on(table.marketId, table.polledAt),
-  ]
-);
-
-export const youtubePollsRelations = relations(youtubePolls, ({ one }) => ({
-  market: one(markets, { fields: [youtubePolls.marketId], references: [markets.id] }),
-}));
-
 // ─── TikTok Polls ────────────────────────────────────────────────────────────────
 
 export const tiktokPolls = pgTable(
   "tiktok_polls",
   {
     id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
-    marketId: text("market_id").notNull().references(() => markets.id),
+    marketId: text("market_id").notNull().references(() => markets.id, { onDelete: "cascade" }),
     viewCount: bigint("view_count", { mode: "bigint" }),
     likeCount: bigint("like_count", { mode: "bigint" }),
-    commentCount: bigint("comment_count", { mode: "bigint" }),
-    shareCount: bigint("share_count", { mode: "bigint" }),
     polledAt: timestamp("polled_at", { mode: "date" }).notNull().defaultNow(),
   },
   (table) => [

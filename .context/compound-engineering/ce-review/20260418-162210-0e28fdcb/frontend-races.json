@@ -1,0 +1,62 @@
+{
+  "reviewer": "julik-frontend-races",
+  "findings": [
+    {
+      "severity": "P2",
+      "title": "Missing onPointerCancel leaves isDragging=true after scroll or system interruption",
+      "file": "src/components/CoinSlider.tsx",
+      "line_hint": 69,
+      "description": "The track div registers onPointerDown, onPointerMove, and onPointerUp but has no onPointerCancel handler. On mobile browsers (iOS Safari, Android Chrome), a mid-drag scroll gesture or system interruption fires pointercancel instead of pointerup. The browser automatically releases the pointer capture on cancel, but isDragging.current is never reset to false. The next pointer interaction enters handlePointerMove with isDragging=true and fires onChange, silently changing the trade amount the user was not intending to set. The fix is a single handler alias and requires no additional dependencies.",
+      "autofix_class": "safe_auto",
+      "suggested_fix": "Add onPointerCancel={handlePointerUp} to the track div at line 69. The existing handlePointerUp body (isDragging.current = false) is the correct action for cancel. Optionally also call e.currentTarget.releasePointerCapture(e.pointerId) inside the handler for clarity, though the browser already does this automatically on pointercancel.",
+      "requires_verification": false,
+      "confidence": 0.92,
+      "pre_existing": false
+    },
+    {
+      "severity": "P2",
+      "title": "CSS pointer-events-none does not stop captured pointer events when disabled transitions mid-drag",
+      "file": "src/components/CoinSlider.tsx",
+      "line_hint": 61,
+      "description": "CoinSlider disables interaction via pointer-events: none on the outer wrapper (line 61). CSS pointer-events suppresses hit-testing for new contacts but has no effect on an active pointer capture: captured events continue routing to the capturing element regardless of CSS. If a drag starts, then the parent TradePanel transitions to isPending=true during the drag, the wrapper gains pointer-events-none on the next render, but already-captured pointer events keep flowing into handlePointerMove and keep calling onChange. The handlePointerMove guard reads the current render closure for disabled, so it closes after one React render cycle -- one frame of stale state allowing an extra onChange call with an amount the user did not confirm.",
+      "autofix_class": "advisory",
+      "suggested_fix": "Mirror the disabled prop into a ref at render time: const disabledRef = useRef(disabled); disabledRef.current = disabled; Guard handlePointerMove with disabledRef.current instead of the closure prop. Optionally also release capture and reset isDragging.current = false when the ref becomes true inside an active drag.",
+      "requires_verification": true,
+      "confidence": 0.65,
+      "pre_existing": false
+    },
+    {
+      "severity": "P3",
+      "title": "Window focus loss on desktop may leave isDragging=true when neither pointercancel nor pointerup fires",
+      "file": "src/components/CoinSlider.tsx",
+      "line_hint": 49,
+      "description": "On desktop browsers, if the user starts dragging and the browser window loses focus, pointer capture is released but whether pointerup or pointercancel fires differs between Chrome and Firefox. If neither fires, isDragging.current stays true. The next pointer movement after refocus -- before a new pointerdown -- fires handlePointerMove and calls onChange. The onPointerCancel fix covers browsers that emit cancel on focus loss; browsers that emit neither require a window-level blur listener as a fallback, which should be verified empirically before adding.",
+      "autofix_class": "advisory",
+      "suggested_fix": "First apply the onPointerCancel fix. Then test in Chrome and Firefox: drag, alt-tab away, return, move the pointer without clicking. If onChange fires unexpectedly, add a blur listener inside handlePointerDown that resets isDragging.current = false and removes itself, cleaning it up in handlePointerUp and handlePointerCancel as well. This is approximately 10 lines and needs no library.",
+      "requires_verification": true,
+      "confidence": 0.62,
+      "pre_existing": false
+    },
+    {
+      "severity": "P3",
+      "title": "balanceError timer clears state unconditionally -- correct pattern but fragile under fast RSC remounts",
+      "file": "src/components/TradePanel.tsx",
+      "line_hint": 76,
+      "description": "The setTimeout callback in flashBalanceError calls setBalanceError empty-string unconditionally after 1500ms. The useEffect cleanup on unmount correctly clears the ref. The pattern is sound under normal conditions. The marginal risk is a fast RSC revalidation or route-level remount where TradePanel unmounts and remounts within the 1500ms window: the old timer is cleared by the unmount cleanup, a new one can start on the remounted instance, and they are independent. No data loss results today but worth noting if RSC polling intervals shorten below 1.5s.",
+      "autofix_class": "advisory",
+      "suggested_fix": "No change required now. The existing guard (clearTimeout before setTimeout in flashBalanceError, plus useEffect cleanup) is the correct pattern. If remount frequency ever approaches the 1500ms window, store a cancel flag in a ref and check it in the callback before calling setBalanceError.",
+      "requires_verification": false,
+      "confidence": 0.61,
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "CoinSlider has no test coverage for pointer event sequences. The missing-cancel path is only exercisable on a real mobile device or a browser that emits pointercancel on scroll. Add a test that fires pointerdown, then pointercancel, then pointermove and asserts onChange is NOT called on the pointermove.",
+    "The checkStaleness and executeBuy window (reported as a duplicate-submission P1 in reliability.json) compounds with the slider race: if the user drags the slider while a stale-price check is in flight, the amount can change between checkStaleness resolving and executeBuy firing. Snapshotting the amount at the start of handleBuy and passing it explicitly into executeBuy would close this consistency gap."
+  ],
+  "testing_gaps": [
+    "No test exercises the pointercancel path on CoinSlider. A test firing pointerdown followed by pointercancel followed by pointermove should assert onChange is not called on the pointermove.",
+    "No test exercises CoinSlider with disabled changing from false to true during an active drag. The test should assert onChange stops after the prop change even while the pointer is still captured.",
+    "No test covers the window focus-loss scenario for CoinSlider on desktop pointer capture. This is not testable in jsdom; a Playwright test that moves browser focus away mid-drag and asserts no further onChange calls after refocus without a new pointerdown is the appropriate vehicle."
+  ]
+}

@@ -1,0 +1,74 @@
+[
+  {
+    "severity": "P1",
+    "title": "balance-fetcher missing fetch-level cache:no-store (layer 3 of three-layer cache rule)",
+    "file": "src/lib/balance-fetcher.ts",
+    "line_hint": 13,
+    "description": "The project's documented three-layer caching rule (feedback_nextjs_caching.md, established in the virality project for Next.js 16.2.1) requires all three layers be applied together: (1) export const dynamic = 'force-dynamic', (2) Cache-Control: no-store on the response, and (3) { cache: 'no-store' } in every fetch() call inside SWR fetchers. The balance/route.ts has layers 1 and 2, but balance-fetcher.ts calls fetch(url) with no cache option, leaving layer 3 missing. The established pattern for this codebase is shown in src/lib/market-fetcher.ts — though that file also lacks the option, balance-fetcher.ts is a changed/new file and the rule applies to it. Missing layer 3 can cause the browser to serve stale cached responses despite SWR refetch intervals firing correctly.",
+    "autofix_class": "one-liner",
+    "suggested_fix": "Change `const res = await fetch(url);` to `const res = await fetch(url, { cache: 'no-store' });` in src/lib/balance-fetcher.ts line 13.",
+    "requires_verification": false,
+    "confidence": 0.82,
+    "pre_existing": false
+  },
+  {
+    "severity": "P2",
+    "title": "TradePanel staleness warning uses hardcoded Tailwind palette colors not in @theme inline tokens",
+    "file": "src/components/TradePanel.tsx",
+    "line_hint": 287,
+    "description": "globals.css defines the project's color system via @theme inline tokens (--color-background, --color-card, --color-accent, --color-green, --color-red, --color-muted, etc.). The staleness warning block (lines 287-307) uses bg-amber-500/10, border-amber-500/30, text-amber-600, dark:text-amber-400, bg-amber-500, and bg-amber-600 — raw Tailwind palette classes with no corresponding CSS variable in globals.css. This bypasses the token system and introduces colors that won't update if the design tokens are changed. The @theme inline pattern in globals.css is the project's stated approach for all UI colors.",
+    "autofix_class": "manual",
+    "suggested_fix": "Add --color-warning and --color-warning-hover tokens to globals.css :root and @theme inline blocks, then replace the amber-* classes with bg-warning/10, border-warning/30, text-warning, bg-warning, bg-warning-hover etc. Alternatively use the existing --accent or a suitable semantic token if amber is not a distinct semantic color.",
+    "requires_verification": true,
+    "confidence": 0.75,
+    "pre_existing": false
+  },
+  {
+    "severity": "P2",
+    "title": "TradePanel tooltip uses bg-black/90 — hardcoded color outside token system",
+    "file": "src/components/TradePanel.tsx",
+    "line_hint": 196,
+    "description": "The YES tooltip div (line 196) and the NO tooltip div (line 213) both use bg-black/90 and text-white. 'black' is not defined as a token in globals.css @theme inline. The project's color system is entirely CSS-variable-based; tooltip backgrounds should use a token (e.g., a --color-tooltip CSS variable) so they remain consistent with the design system. The same issue exists at line 213.",
+    "autofix_class": "one-liner",
+    "suggested_fix": "Add --color-tooltip: #000000 to globals.css :root and --color-tooltip: var(--tooltip) to @theme inline, then use bg-tooltip/90 in the component. Or reuse bg-card with a border if the visual intent allows.",
+    "requires_verification": true,
+    "confidence": 0.72,
+    "pre_existing": false
+  },
+  {
+    "severity": "P2",
+    "title": "TradePanel uses dark: Tailwind variant — incompatible with project's CSS-variable-only theming",
+    "file": "src/components/TradePanel.tsx",
+    "line_hint": 288,
+    "description": "Line 288 uses the class dark:text-amber-400. The project's entire color theme is implemented through CSS variables in globals.css :root with no light/dark split — there is a single set of root-level tokens. No other changed file, and no pattern in globals.css, sets up Tailwind's dark mode class strategy. Using dark: implies Tailwind's class-based or media-based dark mode, which will either never activate or activate based on OS preference — not the project's intentional theme. This is a one-off inconsistency in a new file.",
+    "autofix_class": "one-liner",
+    "suggested_fix": "Remove the dark: variant. Use a single token-based class: replace 'text-amber-600 dark:text-amber-400' with a single class referencing a CSS variable token for the warning text color.",
+    "requires_verification": false,
+    "confidence": 0.80,
+    "pre_existing": false
+  },
+  {
+    "severity": "P3",
+    "title": "BalanceChip shadow utility embeds hardcoded hex fallback #4169e1 inside arbitrary value",
+    "file": "src/components/BalanceChip.tsx",
+    "line_hint": 201,
+    "description": "Line 201 uses the Tailwind arbitrary value shadow-[0_0_0_2px_var(--accent,#4169e1)22]. The #4169e1 is a hardcoded fallback that duplicates --accent's value. If the --accent token is ever changed in globals.css, this shadow will fall back to the stale hardcoded hex rather than the updated token. The project's pattern is to reference CSS variables exclusively (all other usages reference var(--accent) or the Tailwind alias bg-accent, text-accent, etc. without hardcoded fallbacks). The '22' appended to the RGBA-hex is also a non-standard pattern that may not render correctly in all browsers.",
+    "autofix_class": "one-liner",
+    "suggested_fix": "Remove the hex fallback: shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_13%,transparent)] or define a CSS variable --accent-ring in globals.css and reference it as shadow-[0_0_0_2px_var(--accent-ring)].",
+    "requires_verification": true,
+    "confidence": 0.70,
+    "pre_existing": false
+  },
+  {
+    "severity": "P3",
+    "title": "feed/polls route.ts has force-dynamic but no Cache-Control: no-store on response — incomplete three-layer fix",
+    "file": "src/app/api/feed/polls/route.ts",
+    "line_hint": 8,
+    "description": "This is a pre-existing condition (the file is not in the changed-files list), noted here for completeness. The project's three-layer cache rule requires Cache-Control: no-store on the response. feed/polls/route.ts has force-dynamic but no Cache-Control header on its NextResponse.json return. Not a finding for the current diff — flagged as pre_existing.",
+    "autofix_class": "one-liner",
+    "suggested_fix": "Add { headers: { 'Cache-Control': 'no-store' } } to the NextResponse.json call in src/app/api/feed/polls/route.ts.",
+    "requires_verification": false,
+    "confidence": 0.78,
+    "pre_existing": true
+  }
+]

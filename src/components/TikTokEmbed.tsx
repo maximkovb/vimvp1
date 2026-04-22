@@ -1,12 +1,14 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 
 interface TikTokEmbedProps {
   videoId: string;
   title?: string;
   playUrl?: string | null;
   thumbnail?: string | null;
+  creatorId?: string | null;
+  showLink?: boolean;
 }
 
 function MutedIcon() {
@@ -33,12 +35,20 @@ function PlayIcon() {
   );
 }
 
-export function TikTokEmbed({ videoId, title, playUrl, thumbnail }: TikTokEmbedProps) {
+export function TikTokEmbed({ videoId, title, playUrl, thumbnail, creatorId, showLink = true }: TikTokEmbedProps) {
   const [currentPlayUrl, setCurrentPlayUrl] = useState(playUrl ?? null);
   const [refreshing, setRefreshing] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  // React's muted JSX prop only sets the HTML attribute, not the DOM .muted property.
+  // Set it imperatively after each mount (including key-driven remounts on URL change).
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.muted = true;
+    }
+  }, [currentPlayUrl]);
 
   async function handleVideoError() {
     if (refreshing) return;
@@ -131,14 +141,20 @@ export function TikTokEmbed({ videoId, title, playUrl, thumbnail }: TikTokEmbedP
       </div>
 
       {/* Link to original video */}
-      <a
-        href={`https://vm.tiktok.com/${videoId}`}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-xs text-muted hover:text-accent hover:underline self-end"
-      >
-        View on TikTok ↗
-      </a>
+      {showLink && (
+        <a
+          href={
+            creatorId
+              ? `https://www.tiktok.com/@${creatorId}/video/${videoId}`
+              : `https://www.tiktok.com/video/${videoId}`
+          }
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs text-muted hover:text-accent hover:underline self-end"
+        >
+          View on TikTok ↗
+        </a>
+      )}
     </div>
   );
 }

@@ -2,14 +2,13 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { verifyCronAuth } from "@/lib/cron-auth";
 import { computeMarketSuggestion } from "@/lib/services/marketSuggestion";
+import { TIKTOK_VIDEO_ID_RE } from "@/lib/constants";
 
 const MarketSuggestionSchema = z.object({
-  videoId: z.string().regex(/^[a-zA-Z0-9_-]{11}$/),
+  videoId: z.string().regex(TIKTOK_VIDEO_ID_RE),
   title: z.string().min(1).max(200),
-  channelId: z.string().regex(/^UC[a-zA-Z0-9_-]{22}$/),
   channelTitle: z.string().min(1),
   publishedAt: z.string().datetime(),
-  categoryId: z.string().optional(),
   viewCount: z.number().int().min(0),
   likeCount: z.number().int().min(0),
 });
@@ -17,14 +16,12 @@ const MarketSuggestionSchema = z.object({
 /**
  * POST /api/admin/market-suggestion
  *
- * Bearer-token authenticated equivalent of the generateMarketSuggestion() server action.
- * Fetches channel analytics, computes contract parameters (LLM + algorithmic fallback),
- * and returns a market suggestion with suggestedTitle and calibration data.
+ * Bearer-token authenticated market suggestion for TikTok videos.
+ * Returns an algorithmic contract recommendation based on video velocity.
  *
  * Auth: Authorization: Bearer <CRON_SECRET>
  *
- * Body: { videoId, title, channelId, channelTitle, publishedAt, categoryId?,
- *         viewCount, likeCount }
+ * Body: { videoId, title, channelTitle, publishedAt, viewCount, likeCount }
  *
  * Response: { contract, suggestedTitle, videoAgeHours, subscriberCount,
  *             channelAvgViews, duplicateWarning }
@@ -32,11 +29,6 @@ const MarketSuggestionSchema = z.object({
 export async function POST(request: Request) {
   const authError = verifyCronAuth(request);
   if (authError) return authError;
-
-  const apiKey = process.env.YOUTUBE_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json({ error: "YouTube API key not configured" }, { status: 500 });
-  }
 
   let body: unknown;
   try {
@@ -53,6 +45,6 @@ export async function POST(request: Request) {
     );
   }
 
-  const result = await computeMarketSuggestion(parsed.data, apiKey);
+  const result = await computeMarketSuggestion(parsed.data);
   return NextResponse.json(result);
 }

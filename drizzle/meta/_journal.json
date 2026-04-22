@@ -15,6 +15,27 @@
       "when": 1774221842965,
       "tag": "0001_luxuriant_chat",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1743292800000,
+      "tag": "0002_markets_video_id_platform",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1775013686506,
+      "tag": "0003_windy_darwin",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1776367256713,
+      "tag": "0004_hard_excalibur",
+      "breakpoints": true
     }
   ]
 }

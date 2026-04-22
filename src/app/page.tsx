@@ -1,106 +1,75 @@
+export const dynamic = "force-dynamic";
+
 import { db } from "@/db";
 import { markets } from "@/db/schema";
-import { desc, eq, or } from "drizzle-orm";
-import { auth } from "@/lib/auth";
-import { getMarketPrices } from "@/lib/market-utils";
-import Link from "next/link";
-import { MarketCard } from "@/components/MarketCard";
+import { desc, eq, or, sql } from "drizzle-orm";
+import { DiscoverFeed } from "@/components/DiscoverFeed";
 
-function MarketGrid({ items }: { items: (typeof markets.$inferSelect)[] }) {
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-      {items.map((market) => {
-        const prices = getMarketPrices(market);
-        return (
-          <MarketCard
-            key={market.id}
-            id={market.id}
-            title={market.title}
-            status={market.status}
-            questionType={market.questionType}
-            milestoneThreshold={market.milestoneThreshold}
-            priceYes={prices[0]}
-            priceNo={prices[1]}
-            resolvesAt={market.resolvesAt}
-            outcome={market.outcome}
-            videoMetadata={market.videoMetadata}
-          />
-        );
-      })}
-    </div>
-  );
+function safePollCount(s: string | null): number | null {
+  if (s === null) return null;
+  const n = Number(s);
+  if (!Number.isSafeInteger(n)) {
+    console.error(`[poll] count out of safe integer range: ${s} — displaying null`);
+    return null;
+  }
+  return n;
 }
 
 export default async function HomePage() {
-  const session = await auth();
-
-  // Parallel fetch: active/halted + recently resolved
-  const [activeMarkets, resolvedMarkets] = await Promise.all([
-    db
-      .select()
-      .from(markets)
-      .where(
-        or(
-          eq(markets.status, "active"),
-          eq(markets.status, "halted"),
-          eq(markets.status, "resolving")
-        )
+  // Fetch active/halted/resolving markets — resolved markets live at /resolved
+  const activeMarkets = await db
+    .select()
+    .from(markets)
+    .where(
+      or(
+        eq(markets.status, "active"),
+        eq(markets.status, "halted"),
+        eq(markets.status, "resolving")
       )
-      .orderBy(desc(markets.createdAt))
-      .limit(50),
-    db
-      .select()
-      .from(markets)
-      .where(eq(markets.status, "resolved"))
-      .orderBy(desc(markets.resolvedAt))
-      .limit(6),
-  ]);
+    )
+    .orderBy(desc(markets.createdAt))
+    .limit(50);
 
-  const hasMarkets = activeMarkets.length > 0 || resolvedMarkets.length > 0;
+  // Split feed order: resolving-soon cards first, then active
+  const resolvingSoon = activeMarkets.filter(
+    (m) => m.status === "halted" || m.status === "resolving"
+  );
+  const mainMarkets = activeMarkets.filter((m) => m.status === "active");
+  const feedMarkets = [...resolvingSoon, ...mainMarkets];
+
+  // Fetch latest poll per market via DISTINCT ON — uses tiktok_polls_market_polled_idx
+  let pollData: { marketId: string; viewCount: number | null; likeCount: number | null }[] = [];
+  if (feedMarkets.length > 0) {
+    const feedIds = feedMarkets.map((m) => m.id);
+    // Build ARRAY[$1,$2,...] explicitly — passing a JS array directly produces ($1,$2,...) tuple syntax
+    const idsLiteral = sql.join(feedIds.map((id) => sql`${id}`), sql`, `);
+    const result = await db.execute(sql`
+      SELECT DISTINCT ON (market_id) market_id, view_count, like_count
+      FROM tiktok_polls
+      WHERE market_id = ANY(ARRAY[${idsLiteral}])
+      ORDER BY market_id, polled_at DESC
+    `);
+    // db.execute returns a QueryResult with a .rows array
+    type PollRow = { market_id: string; view_count: string | null; like_count: string | null };
+    pollData = (result.rows as PollRow[]).map((r) => ({
+      marketId: r.market_id,
+      viewCount: safePollCount(r.view_count),
+      likeCount: safePollCount(r.like_count),
+    }));
+  }
+
+  // Trending: top 3 most-recently-created active markets
+  const trendingIds = mainMarkets.slice(0, 3).map((m) => m.id);
+
+  // Grid overview shows active/halted/resolving markets only
+  const gridMarkets = [...resolvingSoon, ...mainMarkets];
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-12">
-      <div className="text-center mb-12">
-        <h1 className="text-4xl sm:text-5xl font-bold mb-4">
-          Predict YouTube&apos;s <span className="text-accent">Next Hit</span>
-        </h1>
-        <p className="text-lg text-muted max-w-2xl mx-auto">
-          Bet virtual currency on whether YouTube videos will hit view and
-          engagement milestones. Trade against other predictors and climb the
-          leaderboard.
-        </p>
-        {!session?.user && (
-          <Link
-            href="/auth/signup"
-            className="inline-block mt-6 px-6 py-3 bg-accent hover:bg-accent-hover text-white font-medium rounded-lg transition-colors"
-          >
-            Get 1,000 Free Coins
-          </Link>
-        )}
-      </div>
-
-      {activeMarkets.length > 0 && (
-        <section className="mb-12">
-          <h2 className="text-lg font-semibold mb-4">Active Markets</h2>
-          <MarketGrid items={activeMarkets} />
-        </section>
-      )}
-
-      {resolvedMarkets.length > 0 && (
-        <section className="mb-12">
-          <h2 className="text-lg font-semibold mb-4">Recently Resolved</h2>
-          <MarketGrid items={resolvedMarkets} />
-        </section>
-      )}
-
-      {!hasMarkets && (
-        <div className="text-center text-muted py-16 border border-border rounded-xl bg-card">
-          <p className="text-lg">No active markets yet.</p>
-          <p className="text-sm mt-2">
-            Markets will appear here once an admin creates them.
-          </p>
-        </div>
-      )}
-    </div>
+    <DiscoverFeed
+      feedMarkets={feedMarkets}
+      gridMarkets={gridMarkets}
+      pollData={pollData}
+      trendingIds={trendingIds}
+    />
   );
 }

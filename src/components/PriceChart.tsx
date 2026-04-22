@@ -46,9 +46,9 @@ export function PriceChart({ data }: PriceChartProps) {
     });
 
     const series = chart.addSeries(AreaSeries, {
-      lineColor: "#6366f1",
-      topColor: "rgba(99, 102, 241, 0.3)",
-      bottomColor: "rgba(99, 102, 241, 0.0)",
+      lineColor: "#4169e1",
+      topColor: "rgba(65, 105, 225, 0.2)",
+      bottomColor: "rgba(65, 105, 225, 0.0)",
       lineWidth: 2,
       priceFormat: {
         type: "custom",
@@ -59,16 +59,19 @@ export function PriceChart({ data }: PriceChartProps) {
     chartRef.current = chart;
     seriesRef.current = series;
 
-    const handleResize = () => {
-      if (chartContainerRef.current) {
-        chart.applyOptions({ width: chartContainerRef.current.clientWidth });
+    // ResizeObserver handles both viewport resize and sheet-open transitions.
+    // window.resize does not fire when a parent container changes size (e.g. vaul sheet opening).
+    // Guard against zero-width callbacks that fire while the sheet is still animating in.
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (width && width > 0) {
+        chart.applyOptions({ width });
       }
-    };
-
-    window.addEventListener("resize", handleResize);
+    });
+    observer.observe(chartContainerRef.current);
 
     return () => {
-      window.removeEventListener("resize", handleResize);
+      observer.disconnect(); // disconnect before chart.remove() to avoid stale callbacks
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;

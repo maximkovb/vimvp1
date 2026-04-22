@@ -1,15 +1,16 @@
 import { db } from "@/db";
-import { markets, trades, priceSnapshots, youtubePolls, tiktokPolls } from "@/db/schema";
+import { markets, trades, priceSnapshots, tiktokPolls } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { allPrices } from "@/lib/lmsr";
 import { MarketLiveData } from "@/components/MarketLiveData";
+import { MarketHUD } from "@/components/MarketHUD";
+import { LiveEngagementStats } from "@/components/LiveEngagementStats";
 import { VideoDescription } from "@/components/VideoDescription";
-import { ChannelHistorySection } from "@/components/ChannelHistorySection";
 import { TikTokEmbed } from "@/components/TikTokEmbed";
+import { CreatorBaselineCard } from "@/components/CreatorBaselineCard";
 import type { MarketData } from "@/types/market";
-import { Suspense } from "react";
 
 export default async function MarketPage({
   params,
@@ -47,19 +48,12 @@ export default async function MarketPage({
       .where(eq(priceSnapshots.marketId, id))
       .orderBy(priceSnapshots.recordedAt)
       .limit(500),
-    market.platform === "tiktok"
-      ? db
-          .select()
-          .from(tiktokPolls)
-          .where(eq(tiktokPolls.marketId, id))
-          .orderBy(tiktokPolls.polledAt)
-          .limit(500)
-      : db
-          .select()
-          .from(youtubePolls)
-          .where(eq(youtubePolls.marketId, id))
-          .orderBy(youtubePolls.polledAt)
-          .limit(500),
+    db
+      .select()
+      .from(tiktokPolls)
+      .where(eq(tiktokPolls.marketId, id))
+      .orderBy(tiktokPolls.polledAt)
+      .limit(500),
   ]);
 
   const initialData: MarketData = {
@@ -70,11 +64,13 @@ export default async function MarketPage({
     questionType: market.questionType,
     milestoneThreshold: market.milestoneThreshold.toString(),
     videoId: market.videoId,
-    platform: market.platform,
     tikapiPostId: market.tikapiPostId,
     videoMetadata: market.videoMetadata ?? null,
     priceYes,
     priceNo,
+    quantityYes: quantities[0],
+    quantityNo: quantities[1],
+    bParameter: b,
     outcome: market.outcome,
     resolvesAt: market.resolvesAt?.toISOString() ?? null,
     resolvedAt: market.resolvedAt?.toISOString() ?? null,
@@ -104,66 +100,70 @@ export default async function MarketPage({
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6">
-      {/* Static: video embed */}
-      {market.platform === "tiktok" ? (
-        <div className="flex justify-center mb-6">
-          <div className="w-[325px]">
-            <TikTokEmbed videoId={market.videoId} title={videoMetadata?.title || market.title} />
-          </div>
-        </div>
-      ) : (
-        <div className="aspect-video bg-card rounded-xl overflow-hidden border border-border mb-6">
-          <iframe
-            src={`https://www.youtube.com/embed/${market.videoId}`}
+      {/* Page title */}
+      <h1 className="text-2xl font-bold mb-6">{market.title}</h1>
+
+      {/* Main two-column section: video left + HUD right */}
+      <div className="flex flex-col lg:flex-row gap-6 items-start mb-8">
+        {/* Left column: TikTok video + creator card + description */}
+        <div className="w-full lg:w-[360px] flex-shrink-0 space-y-4">
+          <TikTokEmbed
+            videoId={market.videoId}
             title={videoMetadata?.title || market.title}
-            className="w-full h-full"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowFullScreen
+            playUrl={videoMetadata?.playUrl}
+            thumbnail={videoMetadata?.thumbnail}
+            creatorId={videoMetadata?.creatorId}
           />
-        </div>
-      )}
 
-      {/* Static: description */}
-      {videoMetadata?.description && (
-        <div className="bg-card border border-border rounded-xl p-4 mb-6">
-          <h2 className="text-sm font-medium text-muted mb-3">
-            About This Video
-          </h2>
-          <VideoDescription description={videoMetadata.description} />
-        </div>
-      )}
-
-      {/* Dynamic: everything else, with server-rendered channel history as children */}
-      <MarketLiveData marketId={id} session={session} initialData={initialData}>
-        {market.platform !== "tiktok" && videoMetadata?.channelId && (
-          <Suspense
-            fallback={
-              <div className="bg-card border border-border rounded-xl p-4">
-                <h2 className="text-sm font-medium text-muted mb-3">
-                  Channel History
-                </h2>
-                <div className="flex gap-3 overflow-x-auto pb-2">
-                  {Array.from({ length: 4 }).map((_, i) => (
-                    <div
-                      key={i}
-                      className="flex-shrink-0 w-48 rounded-lg border border-border bg-background overflow-hidden animate-pulse"
-                    >
-                      <div className="w-full aspect-video bg-card" />
-                      <div className="p-2 space-y-1.5">
-                        <div className="h-3 bg-card rounded w-4/5" />
-                        <div className="h-3 bg-card rounded w-3/5" />
-                        <div className="h-2.5 bg-card rounded w-2/5 mt-1" />
-                      </div>
-                    </div>
-                  ))}
+          {/* Creator card */}
+          {videoMetadata && (
+            <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-accent/10 flex items-center justify-center flex-shrink-0">
+                  <span className="text-accent text-sm font-bold">
+                    {videoMetadata.channelTitle?.charAt(0)?.toUpperCase() ?? "?"}
+                  </span>
+                </div>
+                <div className="min-w-0">
+                  <div className="font-medium text-sm truncate">
+                    {videoMetadata.channelTitle}
+                  </div>
+                  <div className="text-xs text-muted">TikTok Creator</div>
                 </div>
               </div>
-            }
-          >
-            <ChannelHistorySection channelId={videoMetadata.channelId} />
-          </Suspense>
-        )}
-      </MarketLiveData>
+
+              {/* Engagement stats — live via SWR */}
+              <LiveEngagementStats marketId={id} initialData={initialData} />
+            </div>
+          )}
+
+          {/* Creator baseline — always render when videoMetadata present */}
+          {videoMetadata && (
+            <CreatorBaselineCard
+              creatorId={videoMetadata.creatorId ?? ""}
+              videoId={market.tikapiPostId ?? market.videoId}
+            />
+          )}
+
+          {/* Video description */}
+          {videoMetadata?.description && (
+            <div className="bg-card border border-border rounded-xl p-4">
+              <h2 className="text-sm font-medium text-muted mb-3">
+                About This Video
+              </h2>
+              <VideoDescription description={videoMetadata.description} />
+            </div>
+          )}
+        </div>
+
+        {/* Right column: sticky HUD */}
+        <div className="w-full lg:flex-1 lg:max-w-[400px] lg:sticky lg:top-4">
+          <MarketHUD marketId={id} session={session} initialData={initialData} />
+        </div>
+      </div>
+
+      {/* Full-width stats section */}
+      <MarketLiveData marketId={id} initialData={initialData} />
     </div>
   );
 }

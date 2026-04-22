@@ -1,0 +1,163 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "id": "TEST-001",
+      "severity": "critical",
+      "confidence": 0.99,
+      "category": "behavioral_change_no_tests",
+      "title": "Oracle outcome encoding is inverted and completely untested",
+      "description": "oracle.ts line 43: outcome = metric >= milestoneThreshold ? 1 : 0. The entire codebase defines 0=YES and 1=NO (schema.ts:106, resolve route, all UI components). The oracle encodes milestone-met as outcome=1 (NO), so every auto-resolved market pays NO holders. No test file exists for oracle.ts.",
+      "file": "C:/Users/rkovb/projects/virality/src/lib/oracle.ts",
+      "line": 43,
+      "evidence": "schema.ts:106: outcome integer 0=YES 1=NO; oracle.ts:43: metric >= milestoneThreshold ? 1 : 0",
+      "missing_test_scenario": "milestone met should produce outcome=0 (YES); current code produces outcome=1 (NO)"
+    },
+    {
+      "id": "TEST-002",
+      "severity": "critical",
+      "confidence": 0.99,
+      "category": "untested_branches",
+      "title": "distributePayout has zero test coverage",
+      "description": "payout.ts is never imported by any test file. Three critical untested branches: (1) idempotency early-return when alreadyPaid set is populated; (2) outcome=0 selects YES holders vs outcome=1 selects NO holders; (3) payout amount equals raw share count not cost basis.",
+      "file": "C:/Users/rkovb/projects/virality/src/lib/services/payout.ts",
+      "line_range": "11-66",
+      "missing_test_scenarios": [
+        "calling twice for same market credits balances exactly once",
+        "outcome=0 pays only outcome=0 positions ignores outcome=1",
+        "no winning positions returns without SQL"
+      ]
+    },
+    {
+      "id": "TEST-003",
+      "severity": "high",
+      "confidence": 0.99,
+      "category": "untested_branches",
+      "title": "refundPositions has zero test coverage",
+      "description": "refundPositions in payout.ts is completely untested. Key gaps: (1) refundAmount = shares * avgCostBasis formula; (2) shares-zeroing UPDATE is the idempotency guard; (3) zero-refund positions are silently skipped.",
+      "file": "C:/Users/rkovb/projects/virality/src/lib/services/payout.ts",
+      "line_range": "72-123",
+      "missing_test_scenarios": [
+        "shares set to 0 after refund",
+        "refund amount equals shares * avgCostBasis",
+        "second call is a no-op"
+      ]
+    },
+    {
+      "id": "TEST-004",
+      "severity": "high",
+      "confidence": 0.95,
+      "category": "untested_branches",
+      "title": "Oracle uses only latest poll; any-poll-ever semantics neither implemented nor tested",
+      "description": "oracle.ts queries only the most-recent poll (LIMIT 1). Polls [below,above,below] resolve NO. Required semantics: any poll above threshold resolves YES. No test documents or verifies either semantic.",
+      "file": "C:/Users/rkovb/projects/virality/src/lib/oracle.ts",
+      "line_range": "27-34",
+      "missing_test_scenarios": [
+        "poll sequence [below,above,below] -- current impl resolves NO",
+        "any poll exceeding threshold should produce YES under required semantics"
+      ]
+    },
+    {
+      "id": "TEST-005",
+      "severity": "high",
+      "confidence": 0.9,
+      "category": "untested_branches",
+      "title": "Concurrent oracle calls: distributePayout called unconditionally regardless of UPDATE affected rows",
+      "description": "oracle.ts WHERE status=resolving guards the UPDATE but distributePayout is called unconditionally after. Under read-committed isolation two concurrent transactions can both pass the alreadyPaid check before either commits.",
+      "file": "C:/Users/rkovb/projects/virality/src/lib/oracle.ts",
+      "line_range": "47-55",
+      "missing_test_scenarios": [
+        "two simultaneous resolveMarket calls produce payouts equal to exactly one resolution"
+      ]
+    },
+    {
+      "id": "TEST-006",
+      "severity": "medium",
+      "confidence": 0.97,
+      "category": "untested_branches",
+      "title": "Admin resolve route has no test coverage",
+      "description": "route.ts at [id]/resolve has no test file. Six branches: 401, 400 invalid JSON, 400 schema, 404 not found, 422 wrong status, 200 success. The 422 branch prevents re-resolving resolved markets.",
+      "file": "C:/Users/rkovb/projects/virality/src/app/api/admin/markets/[id]/resolve/route.ts",
+      "line_range": "27-84",
+      "missing_test_scenarios": [
+        "POST resolved market returns 422",
+        "POST non-existent market returns 404",
+        "POST outcome=0 calls distributePayout with 0"
+      ]
+    }
+  ],
+  "residual_risks": [
+    {
+      "id": "RISK-001",
+      "severity": "critical",
+      "title": "Oracle outcome inversion pays NO holders on YES-winning markets",
+      "description": "Inverted encoding in oracle.ts (1 for milestone met) is a live bug on every cron-resolved market. Manual admin route unaffected.",
+      "likelihood": "certain on any cron-resolved market that hits its milestone",
+      "mitigation": "Fix oracle.ts line 43 to 0 for milestone-met; add test asserting outcome=0 when metric >= threshold"
+    },
+    {
+      "id": "RISK-002",
+      "severity": "high",
+      "title": "Double-payout possible under concurrent cron runs",
+      "description": "distributePayout alreadyPaid check reads coin_transactions inside the same transaction. Under read-committed isolation two concurrent transactions may both see empty coin_transactions and double-pay.",
+      "likelihood": "low but non-zero under overlapping cron runs",
+      "mitigation": "Check UPDATE affected rows before calling distributePayout, or add unique constraint on (reference_id, user_id, type)"
+    },
+    {
+      "id": "RISK-003",
+      "severity": "medium",
+      "title": "refundPositions relies solely on shares zeroing for idempotency",
+      "description": "Unlike distributePayout, refundPositions has no coin_transactions pre-flight check. Partial failures leaving shares non-zero allow duplicate refunds on retry.",
+      "likelihood": "low given transactional usage",
+      "mitigation": "Add idempotency test; consider coin_transactions pre-flight check"
+    }
+  ],
+  "testing_gaps": [
+    {
+      "gap": "No test file for src/lib/oracle.ts",
+      "required_scenarios": [
+        "milestone met encodes outcome=0 (YES)",
+        "milestone not met encodes outcome=1 (NO)",
+        "null metric encodes outcome=1 (NO)",
+        "no poll data throws error",
+        "market not found throws error",
+        "already-resolved: UPDATE affects 0 rows but distributePayout still called"
+      ]
+    },
+    {
+      "gap": "No test file for src/lib/services/payout.ts",
+      "required_scenarios": [
+        "distributePayout outcome=0 pays only YES holders",
+        "distributePayout outcome=1 pays only NO holders",
+        "distributePayout second call is idempotent",
+        "distributePayout no winners returns without DB writes",
+        "distributePayout payout amount equals share count",
+        "refundPositions each user receives shares * avgCostBasis",
+        "refundPositions shares set to 0 after refund",
+        "refundPositions second call is a no-op",
+        "refundPositions zero-refund positions skipped"
+      ]
+    },
+    {
+      "gap": "No test file for src/app/api/admin/markets/[id]/resolve/route.ts",
+      "required_scenarios": [
+        "outcome=0 for resolving market succeeds",
+        "outcome=0 for failed market succeeds",
+        "resolved market returns 422",
+        "non-existent market returns 404",
+        "invalid JSON returns 400",
+        "outcome not in 0 or 1 returns 400",
+        "missing auth returns 401"
+      ]
+    },
+    {
+      "gap": "No test file for src/app/api/cron/resolve-markets/route.ts",
+      "required_scenarios": [
+        "ACTIVE past haltsAt transitions to HALTED",
+        "HALTED past resolvesAt calls resolveMarket",
+        "failed resolveMarket transitions to failed",
+        "missing auth returns 401"
+      ]
+    }
+  ]
+}

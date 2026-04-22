@@ -3,9 +3,9 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   images: {
     remotePatterns: [
-      { protocol: "https", hostname: "i.ytimg.com" },
-      { protocol: "https", hostname: "img.youtube.com" },
       { protocol: "https", hostname: "*.tiktokcdn.com" },
+      { protocol: "https", hostname: "*.tiktokcdn-us.com" },
+      { protocol: "https", hostname: "*.tiktokcdn-us.com" },
       { protocol: "https", hostname: "p16-sign.tiktokcdn.com" },
       { protocol: "https", hostname: "p77-sign.tiktokcdn.com" },
     ],
@@ -25,8 +25,9 @@ const nextConfig: NextConfig = {
               "default-src 'self'",
               "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
               "style-src 'self' 'unsafe-inline'",
-              "img-src 'self' https://i.ytimg.com https://img.youtube.com https://*.tiktokcdn.com data: blob:",
-              "frame-src https://www.youtube.com https://www.tiktok.com",
+              "img-src 'self' https://*.tiktokcdn.com data: blob:",
+              "frame-src https://www.tiktok.com",
+              "media-src 'self' https://*.tiktok.com https://*.tiktokv.com https://*.tiktokcdn.com https://*.tiktokcdn-us.com https://*.tikwm.com",
               "connect-src 'self'",
               "font-src 'self' data:",
             ].join("; "),

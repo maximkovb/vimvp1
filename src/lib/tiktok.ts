@@ -1,5 +1,34 @@
 import { TIKTOK_VIDEO_ID_RE } from "@/lib/constants";
 
+export interface TikTokUserPost {
+  videoId: string;   // d.id — the canonical TikTok video ID
+  viewCount: number; // d.play_count
+  createdAt: string; // ISO string from d.create_time * 1000
+}
+
+/**
+ * Fetches a creator's most recent public posts via TikWM.
+ * Returns null if the account is not found or private.
+ * Throws on network or unexpected HTTP errors.
+ *
+ * IMPORTANT: d.create_time is Unix seconds — always multiply by 1000.
+ */
+export async function fetchTikTokUserPosts(
+  creatorId: string,
+  count = 20
+): Promise<TikTokUserPost[] | null> {
+  const url = `https://www.tikwm.com/api/user/posts?unique_id=${encodeURIComponent(creatorId)}&count=${count}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(8_000) });
+  if (!res.ok) throw new Error(`TikWM HTTP ${res.status}`);
+  const json = await res.json();
+  if (json?.code !== 0 || !json?.data?.videos) return null;
+  return (json.data.videos as Record<string, unknown>[]).map((v) => ({
+    videoId: String(v.id ?? ""),
+    viewCount: Number(v.play_count ?? 0),
+    createdAt: new Date((Number(v.create_time ?? 0)) * 1000).toISOString(),
+  }));
+}
+
 export interface TikTokStats {
   viewCount: number;
   likeCount: number;
@@ -10,6 +39,8 @@ export interface TikTokStats {
   creatorId: string;
   thumbnailUrl: string;
   tikapiPostId: string;
+  /** Direct MP4 URL from TikWM CDN. CDN-signed, expires ~24h. */
+  playUrl: string;
 }
 
 /**
@@ -70,5 +101,6 @@ export async function fetchTikTokStatsById(
     creatorId:    d.author?.unique_id ?? "",
     thumbnailUrl: d.cover ?? "",
     tikapiPostId: d.id ?? videoId,
+    playUrl: d.play ?? "",
   };
 }

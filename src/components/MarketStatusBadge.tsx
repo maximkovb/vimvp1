@@ -13,7 +13,25 @@ const statusConfig: Record<
   failed: { label: "Failed", className: "bg-red/10 text-red" },
 };
 
-export function MarketStatusBadge({ status }: { status: string }) {
+interface MarketStatusBadgeProps {
+  status: string;
+  /**
+   * When true, renders a pulsing amber "RESOLVING SOON" badge variant.
+   * Intended for use on `MarketCard` when status is halted or resolving.
+   */
+  pulsing?: boolean;
+}
+
+export function MarketStatusBadge({ status, pulsing = false }: MarketStatusBadgeProps) {
+  if (pulsing) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold bg-amber-500/20 text-amber-500 animate-pulse">
+        <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />
+        RESOLVING SOON
+      </span>
+    );
+  }
+
   const config = statusConfig[status as MarketStatus] || statusConfig.draft;
 
   return (
