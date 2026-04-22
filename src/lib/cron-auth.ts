@@ -18,10 +18,10 @@ function safeEqual(a: string, b: string): boolean {
 export function verifyCronAuth(request: Request): NextResponse | null {
   const secret = process.env.CRON_SECRET;
   if (!secret) {
-    return NextResponse.json(
-      { error: "CRON_SECRET not configured" },
-      { status: 500 }
-    );
+    // Don't confirm server misconfiguration to unauthenticated callers —
+    // return the same 401 they'd see for a wrong secret. Log for the operator.
+    console.error("[cron-auth] CRON_SECRET not configured");
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
   const authHeader = request.headers.get("authorization") ?? "";
