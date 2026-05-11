@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { db } from "@/db";
 import { markets } from "@/db/schema";
 import { desc, eq, or, sql } from "drizzle-orm";
-import { DiscoverFeed } from "@/components/DiscoverFeed";
+import { DiscoverTabView } from "@/components/DiscoverTabView";
 
 function safePollCount(s: string | null): number | null {
   if (s === null) return null;
@@ -65,7 +65,7 @@ export default async function HomePage() {
   const gridMarkets = [...resolvingSoon, ...mainMarkets];
 
   return (
-    <DiscoverFeed
+    <DiscoverTabView
       feedMarkets={feedMarkets}
       gridMarkets={gridMarkets}
       pollData={pollData}
